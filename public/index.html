@@ -198,19 +198,21 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
   <!-- ============ 記録 ============ -->
   <section class="tab" id="t-log">
     <div class="card">
-      <h2>取り込む</h2>
-      <p class="msg">ヘルスプラネットの体組成と、NRCからStravaに流れたランを取ってきて、下のフォームに入れます。</p>
+      <h2>体組成を取り込む</h2>
+      <p class="msg">ヘルスプラネットから、体重・体脂肪率・筋肉量・基礎代謝などを自動で取ってきます。</p>
       <div class="grid">
-        <button id="pullBtn">今日のデータを取り込む</button>
+        <button id="pullBtn">今日の体組成</button>
         <button class="ghost" id="backfillBtn">過去30日をまとめて</button>
       </div>
       <div class="msg" id="pullMsg"></div>
-      <details style="margin-top:10px">
-        <summary class="msg" style="cursor:pointer">連携が使えないときはスクショから</summary>
-        <div class="field" style="margin-top:8px"><input type="file" id="shots" accept="image/*" multiple></div>
-        <button class="ghost" id="ocrBtn">画像を読み取る</button>
-        <div class="msg" id="ocrMsg"></div>
-      </details>
+    </div>
+
+    <div class="card">
+      <h2>ランのスクショを読む</h2>
+      <p class="msg">Nike Run Club の結果画面を選ぶと、距離・時間・ペース・消費カロリー・高低差・ピッチを読み取ってフォームに入れます。</p>
+      <div class="field"><input type="file" id="shots" accept="image/*" multiple></div>
+      <button id="ocrBtn">読み取る</button>
+      <div class="msg" id="ocrMsg"></div>
     </div>
 
     <div class="card">
@@ -691,50 +693,33 @@ async function callFn(name, params){
   if(!res.ok) throw new Error(j.error||`${name} ${res.status}`);
   return j;
 }
-/* 体組成とランを日付で突き合わせて1件にまとめる */
-function mergeDays(body, runs){
-  const byDate = {};
-  for(const b of body) byDate[b.date] = Object.assign({date:b.date, type:"室内トレ"}, b);
-  for(const r of runs){
-    byDate[r.date] = Object.assign({date:r.date, type:"外ラン"}, byDate[r.date]||{}, r, {type:"外ラン"});
-  }
-  return Object.values(byDate).sort((a,b)=>a.date.localeCompare(b.date));
-}
 async function pull(days){
   const m = $("#pullMsg");
   const to = new Date(), from = new Date(Date.now()-(days-1)*864e5);
   $("#pullBtn").disabled = $("#backfillBtn").disabled = true;
   toast(m,"取り込み中…");
   try{
-    const [hp, st] = await Promise.allSettled([
-      callFn("healthplanet",{from:iso(from), to:iso(to)}),
-      callFn("strava",{from:iso(from), to:iso(to)})
-    ]);
-    const body = hp.status==="fulfilled" ? hp.value.records : [];
-    const runs = st.status==="fulfilled" ? st.value.records : [];
-    const errs = [hp,st].filter(x=>x.status==="rejected").map(x=>x.reason.message);
-    const merged = mergeDays(body, runs);
+    const hp = await callFn("healthplanet",{from:iso(from), to:iso(to)});
+    const body = hp.records || [];
+    if(!body.length) throw new Error("体組成データが見つかりませんでした");
     if(days===1){
       const t = iso(new Date());
-      const row = merged.find(r=>r.date===t) || merged[merged.length-1];
-      if(!row) throw new Error("データが見つかりませんでした");
+      const row = body.find(r=>r.date===t) || body[body.length-1];
       fillForm(row);
-      toast(m, `${row.date} のデータを入れました。きつさを選んで保存してください。`
-        + (errs.length?`（${errs.join(" / ")}）`:""));
+      toast(m, `${row.date} の体組成を入れました。ランがあればスクショを読ませてください。`);
     }else{
       let n=0;
-      for(const row of merged){
+      for(const row of body){
         const i = DB.records.findIndex(r=>r.date===row.date);
-        if(i>=0) DB.records[i] = Object.assign({}, DB.records[i], row);
-        else { DB.records.push(row); n++; }
+        if(i>=0) DB.records[i] = Object.assign({}, DB.records[i], row);   // ランの値は残す
+        else { DB.records.push(Object.assign({type:"室内トレ"}, row)); n++; }
       }
       DB.records.sort((a,b)=>a.date.localeCompare(b.date));
       renderCharts(); renderDiet();
-      toast(m, `${merged.length}日分を反映（新規 ${n}件）。設定タブの保存するを押してください。`
-        + (errs.length?`（${errs.join(" / ")}）`:""));
+      toast(m, `${body.length}日分を反映（新規 ${n}件）。設定タブの保存するを押してください。`);
     }
-    if(hp.status==="fulfilled" && hp.value.newRefreshToken)
-      toast(m, m.textContent + ` ／ ヘルスプラネットの新しいリフレッシュトークン: ${hp.value.newRefreshToken}（Netlifyの環境変数を更新してください）`);
+    if(hp.newRefreshToken)
+      toast(m, m.textContent + ` ／ 新しいリフレッシュトークン: ${hp.newRefreshToken}（Netlifyの環境変数を更新してください）`);
   }catch(e){ toast(m,"取り込みに失敗: "+e.message, true); }
   $("#pullBtn").disabled = $("#backfillBtn").disabled = false;
 }
@@ -937,12 +922,26 @@ $("#syncBtn").onclick = ()=>sync("save");
 $("#gpxBtn").onclick = ()=>todayRoute && download(`${todayRoute.name}.gpx`, gpx(todayRoute),"application/gpx+xml");
 $("#shuffleBtn").onclick = ()=>{ if(todayRoute) pickRoute(todayRoute.target, todayRoute.id); };
 
+/* 設定は端末に覚えさせる（自分のiPhoneでしか開かない前提） */
+const REMEMBER = ["npoint","anthKey","fnBase","goalW"];
+function loadSettings(){
+  try{ for(const id of REMEMBER){
+    const v = localStorage.getItem("asaran:"+id);
+    if(v) $("#"+id).value = v;
+  } }catch(e){}
+}
+function saveSettings(){
+  try{ for(const id of REMEMBER) localStorage.setItem("asaran:"+id, $("#"+id).value); }catch(e){}
+}
+REMEMBER.forEach(id=>$("#"+id).addEventListener("change", saveSettings));
+
 const now = new Date();
 $("#today").textContent = now.toLocaleDateString("ja-JP",{month:"long",day:"numeric",weekday:"short"});
 $("#f-date").value = iso(now);
 $("#npoint").value = NPOINT_URL;
+loadSettings();
 renderCharts(); renderRoutes();
-if(NPOINT_URL) sync("load").then(loadWeather); else loadWeather();
+if($("#npoint").value) sync("load").then(loadWeather); else loadWeather();
 </script>
 </body>
 </html>

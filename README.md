@@ -1,70 +1,70 @@
 # 朝ラン｜セットアップ
 
 ```
-public/index.html                    画面（これ1枚）
-netlify/functions/healthplanet.mjs   タニタ体組成
-netlify/functions/strava.mjs         Strava（NRCの受け皿）
+public/index.html                    画面
+netlify/functions/healthplanet.mjs   体組成をタニタから取ってくる
 netlify.toml
 ```
 
-Functions を使うので、フォルダのドラッグ&ドロップではなく **GitHub のリポジトリを
-Netlify に繋いで**デプロイしてください。ビルドコマンドは空、公開ディレクトリは `public`。
+Functions を使うので、GitHub のリポジトリを Netlify に繋いでデプロイします。
+ビルドコマンドは空、公開ディレクトリは `public`。
+
+## データの流れ
+
+```
+タニタ体組成計 → ヘルスプラネット → healthplanet関数 → サイト（ボタン1つ）
+Nike Run Club → 結果画面のスクショ → Claudeが読み取り → フォームに自動入力
+```
+
+体組成の9項目は自動、ランはスクショ1枚。Strava は 2026年6月から
+Standard Tier の開発者にサブスクリプションを要求するようになったので使いません。
 
 ---
 
-## 1. Health Planet
+## 1. npoint.io
+
+https://www.npoint.io/ で新しいビンを作り、中身を `{"records":[],"routes":[]}` にして保存。
+発行される API URL（`https://api.npoint.io/xxxxxxxx`）を控えます。
+
+## 2. Health Planet
 
 1. https://www.healthplanet.jp/apis_account.do で新規登録
-   - アプリケーションタイプは「クライアントアプリケーション」
-   - クライアントIDとクライアントシークレットが発行される
+   - アプリケーションタイプは **クライアントアプリケーション**
+   - ホストドメインには Netlify のドメイン（`xxxx.netlify.app`）
 2. Netlify の環境変数に `HP_CLIENT_ID` と `HP_CLIENT_SECRET` を入れてデプロイ
-3. ブラウザで認可画面を開いてアクセスを許可し、表示された認可コードを控える
+3. 認可画面を開いてアクセスを許可し、表示された認可コードを控える
 
 ```
 https://www.healthplanet.jp/oauth/auth?client_id=<クライアントID>&redirect_uri=https://www.healthplanet.jp/success.html&scope=innerscan&response_type=code
 ```
 
-4. 認可コードを refresh_token に交換する
+4. 認可コードを refresh_token に交換
 
 ```
-https://<あなたのサイト>/.netlify/functions/healthplanet?action=exchange&code=<認可コード>
+https://<サイト>/.netlify/functions/healthplanet?action=exchange&code=<認可コード>
 ```
 
-5. 返ってきた `refresh_token` を環境変数 `HP_REFRESH_TOKEN` に入れて再デプロイ
+5. `refresh_token` を環境変数 `HP_REFRESH_TOKEN` に入れて再デプロイ
 
-以降はサイトの「今日のデータを取り込む」だけで体重・体脂肪率・筋肉量・基礎代謝などが入ります。
-アクセストークンは毎回リフレッシュするので、30日で切れる心配はありません。
-まれに refresh_token が更新された場合は画面に新しい値が出るので、環境変数を貼り替えてください。
+## 3. ランの記録
 
-## 2. Strava（Nike Run Club の受け皿）
+Nike Run Club で走り終わったら、結果画面のスクリーンショットを撮っておきます。
+サイトの記録タブ >「ランのスクショを読む」で画像を選んで読み取るを押すと、
+距離・時間・平均ペース・消費カロリー・高低差・ピッチが自動でフォームに入ります。
 
-まず NRC アプリで **プロフィール > 設定 > パートナー > Strava** を繋ぎます。
-これで以降のランが自動で Strava に入ります（過去分は同期されません）。
+体組成のボタンと合わせて、朝の操作は「体組成を取り込む → スクショを読む →
+きつさを選ぶ → 保存」の4アクションです。
 
-1. https://www.strava.com/settings/api でアプリを作成（無料）
-2. `STRAVA_CLIENT_ID` と `STRAVA_CLIENT_SECRET` を環境変数に
-3. 認可URLを開いて許可し、リダイレクト先URLの `code=` を控える
+## 4. サイト側の設定
 
-```
-https://www.strava.com/oauth/authorize?client_id=<ID>&response_type=code&redirect_uri=http://localhost&approval_prompt=force&scope=activity:read_all
-```
+設定タブで入れるもの（端末に保存されるので初回だけ）:
 
-4. 交換する
+- 目標体重（60kg）
+- Anthropic APIキー — 毎朝の指示とスクショ読み取り用
+- Netlify Functions のベースURL — 既定の `/.netlify/functions` のままでOK
+- npoint.io の URL — 手順1のもの
 
-```
-https://<あなたのサイト>/.netlify/functions/strava?action=exchange&code=<コード>
-```
-
-5. `refresh_token` を `STRAVA_REFRESH_TOKEN` に入れて再デプロイ
-
-## 3. サイト側
-
-設定タブで入れるもの:
-
-- 目標体重（初期値 60kg）
-- Anthropic APIキー — 毎朝の指示とスクショ読み取りに使う
-- npoint.io の JSON URL — 記録とルート台帳の保存先
-- OpenRouteService のキーはルート生成時に都度入力
+OpenRouteService のキーはルート生成のときだけ都度入力します。
 
 ## 環境変数まとめ
 
@@ -72,5 +72,6 @@ https://<あなたのサイト>/.netlify/functions/strava?action=exchange&code=<
 | --- | --- |
 | `HP_CLIENT_ID` / `HP_CLIENT_SECRET` | Health Planet アプリ |
 | `HP_REFRESH_TOKEN` | Health Planet 認可済みトークン |
-| `STRAVA_CLIENT_ID` / `STRAVA_CLIENT_SECRET` | Strava アプリ |
-| `STRAVA_REFRESH_TOKEN` | Strava 認可済みトークン |
+
+環境変数を追加・変更したら、そのつど再デプロイしないと反映されません。
+
