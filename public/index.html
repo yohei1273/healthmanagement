@@ -453,9 +453,19 @@ function saveDay(){
   save();
 }
 
+/* 日付の引き算をモデルにさせると「最新の記録＝昨日」と決めつけて外す。
+   何日前かをこちらで計算して明示する。 */
+function daysAgo(date){
+  const a = new Date(iso(new Date())+"T12:00:00");
+  const b = new Date(date+"T12:00:00");
+  return Math.round((a-b)/864e5);
+}
+function labelOf(n){
+  return n===0 ? "今日" : n===1 ? "昨日" : n===2 ? "一昨日" : `${n}日前`;
+}
 function briefContext(){
   const recent = DB.records.slice(-21).map(r=>({
-    日付:r.date, 内容:r.type, 体重:r.w, 体脂肪率:r.fat, 筋肉量:r.mus,
+    日付:r.date, いつ:labelOf(daysAgo(r.date)), 内容:r.type, 体重:r.w, 体脂肪率:r.fat, 筋肉量:r.mus,
     距離:r.dist, 時間:r.time, ペース:r.pace, 高低差:r.elev, ピッチ:r.pitch,
     きつさ:r.hard, メモ:r.memo, 走った方角:r.dir
   }));
@@ -590,11 +600,12 @@ function renderBrief(fromCache){
       x.classList.toggle("on", x.dataset.s === "post"));
   }
   const v = $("#verdict");
-  v.textContent = brief.mode;
-  v.className = "v " + (brief.mode==="外ラン" ? "out" : "in");
-  $("#headline").textContent = brief.headline || "";
+  const mode = done ? done.type : brief.mode;      // 記録があれば実際にやった内容が正
+  v.textContent = mode;
+  v.className = "v " + (mode==="外ラン" ? "out" : "in");
+  $("#headline").textContent = done ? "おつかれさま" : (brief.headline || "");
 
-  if(brief.mode==="外ラン" && brief.km){
+  if(!done && brief.mode==="外ラン" && brief.km){
     $("#outdoor").style.display="block"; $("#indoor").style.display="none";
     $("#routeCard").style.display="block";
     $("#targetKm").textContent = Number(brief.km).toFixed(1);
@@ -605,6 +616,9 @@ function renderBrief(fromCache){
       if(brief.shape) shapeMode = brief.shape === "往復" ? "outback" : "loop";
       pickRoute(Number(brief.km), null, brief.direction);
     }
+  }else if(done){
+    $("#outdoor").style.display="none"; $("#indoor").style.display="none";
+    $("#routeCard").style.display="none";
   }else{
     $("#outdoor").style.display="none"; $("#indoor").style.display="block";
     $("#routeCard").style.display="none";
@@ -622,6 +636,11 @@ function renderStretch(){
   $("#stretchMenu").innerHTML = items.length
     ? items.map(([n,x])=>`<li><span>${n}</span><span class="set">${x}</span></li>`).join("")
     : `<li><span>今日はなしで大丈夫です</span><span></span></li>`;
+  if(todayRecord() && stretchMode==="pre"){
+    $("#stretchNote").textContent =
+      "今日はもう走り終わっているので、運動後のほうを見てください。";
+    return;
+  }
   $("#stretchNote").textContent = stretchMode==="pre"
     ? "走る前は動かしながら可動域を広げます。伸ばして止める形は走った後に。"
     : "体が温かいうちに。反動をつけず、呼吸を止めないでください。";
@@ -979,6 +998,9 @@ const COACH_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
 彼は滝ノ水中央公園を起終点に毎朝走り、体重60kgを目標に減量しています。
 完全休養日は作らず、疲れている日も何かはやる方針です。
 
+各記録には「いつ」が付いています。日付から自分で何日前かを計算せず、
+必ずその表記に従ってください。「今日」と書かれた記録は今日のことです。
+
 話し方の指針:
 - 一人のコーチとして、対等に、率直に話す。敬語は使いすぎない。
 - 褒めるときは必ず具体的な数字を根拠にする。「すごいですね」だけは言わない。
@@ -1009,7 +1031,9 @@ function coachContext(){
     天気: wxData ? {気温:wxData.temp, 天気:WX[wxData.code], 降水:wxData.prec} : "不明",
     積み上げ: tallies(),
     目標体重: Number($("#goalW").value) || 60,
-    直近の記録: DB.records.slice(-14)
+    今日すでに実施した内容: todayRecord() || "まだ何もしていない",
+    直近の記録: DB.records.slice(-14).map(r=>
+      Object.assign({いつ:labelOf(daysAgo(r.date))}, r))
   };
 }
 async function askCoach(text, opts){
@@ -1224,7 +1248,10 @@ function saveRecord(){
   }
   renderCharts(); renderRecords(); renderDiet(); renderTally();
   toast($("#saveMsg"), i>=0?"同じ日付の記録を上書きしました。設定タブの保存するを押してください。":"追加しました。設定タブの保存するを押してください。");
-  save(); renderBrief(true);
+  save();
+  // その日の内容が確定したので、指示も実施済み前提で組み直す
+  if(rec.date === iso(new Date())){ today().brief = null; startBrief(); }
+  else renderBrief(true);
   commentOnRecord(rec);
 }
 async function sync(dir, quiet){
