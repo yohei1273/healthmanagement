@@ -55,9 +55,20 @@ h2{font-size:14px;font-weight:700;margin-bottom:10px}
   font-variant-numeric:tabular-nums}
 .stat .d{font-family:var(--num);font-size:12px}
 .stat .d.dn{color:var(--green)}.stat .d.up{color:var(--vermilion)}
-.req{border-top:1px solid var(--rule);margin-top:16px;padding-top:14px}
-.req input{margin-bottom:8px}
-.req button{width:100%}
+.tally{display:flex;gap:14px;flex-wrap:wrap;padding-bottom:12px;margin-bottom:12px;
+  border-bottom:1px solid var(--rule)}
+.tally div{font-family:var(--num);font-size:12px;color:var(--sub)}
+.tally b{display:block;font-size:20px;font-weight:700;color:var(--ink);
+  font-variant-numeric:tabular-nums}
+.chat{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto;
+  padding-right:2px}
+.bub{max-width:86%;padding:9px 12px;font-size:13.5px;line-height:1.65}
+.bub.coach{align-self:flex-start;background:#F1F3EC;border:1px solid var(--rule)}
+.bub.me{align-self:flex-end;background:var(--ink);color:var(--panel)}
+.bub.wait{color:var(--sub);font-style:italic}
+.chatbar{display:flex;gap:8px;margin-top:12px}
+.chatbar input{flex:1}
+.chatbar button{width:auto;padding:9px 16px}
 .flow{list-style:none;font-size:13.5px}
 .flow li{padding:7px 0 7px 22px;position:relative;border-bottom:1px dashed var(--rule)}
 .flow li:last-child{border-bottom:0}
@@ -168,11 +179,17 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
         <ul class="menu" id="indoorMenu"></ul>
         <div class="why" id="whyIn"></div>
       </div>
-      <div class="req">
-        <label for="request">今朝の要望</label>
-        <input type="text" id="request" placeholder="例）今日は30分しかない／坂を走りたい／膝が張ってる">
-        <button class="ghost sm" id="reqBtn">組み直す</button>
+    </div>
+
+    <div class="card">
+      <h2>コーチ</h2>
+      <div class="tally" id="tally"></div>
+      <div class="chat" id="chat"></div>
+      <div class="chatbar">
+        <input type="text" id="request" placeholder="今日は30分しかない／膝が張ってる／坂を走りたい">
+        <button id="sendBtn">送る</button>
       </div>
+      <button class="ghost sm" id="reqBtn" style="width:100%;margin-top:8px">話をふまえてメニューを組み直す</button>
     </div>
 
     <div class="card" id="routeCard">
@@ -410,7 +427,7 @@ let brief = null;
    そのまま出るようにキャッシュする。要望を出したときだけ組み直す。 */
 const dayKey = () => "asaran:day:" + iso(new Date());
 function saveDay(){
-  try{ localStorage.setItem(dayKey(), JSON.stringify({brief, route:todayRoute})); }catch(e){}
+  try{ localStorage.setItem(dayKey(), JSON.stringify({brief, route:todayRoute, chat})); }catch(e){}
 }
 function loadDay(){
   try{
@@ -433,7 +450,8 @@ function startBrief(){
   if(c && c.brief){
     brief = c.brief;
     todayRoute = c.route || null;
-    renderBrief(true);
+    chat = c.chat || [];
+    renderBrief(true); renderChat();
     return;
   }
   buildBrief();
@@ -446,10 +464,11 @@ function briefContext(){
     きつさ:r.hard, メモ:r.memo, 走った方角:r.dir
   }));
   const routes = [...new Set(DB.routes.map(r=>r.target))].sort((a,b)=>a-b);
-  const req = ($("#request") && $("#request").value.trim()) || "";
+  const said = chat.filter(m=>m.role==="user").map(m=>m.content);
   return {
     今日: iso(new Date()),
-    今朝の要望: req || "なし",
+    今朝のやりとり: said.length ? said : "なし",
+    積み上げ: tallies(),
     目標体重: (DB.settings && DB.settings.goalW) || 60,
     現在の天気: wxData ? {
       気温:wxData.temp, 体感:wxData.feels, 天気:WX[wxData.code]||"不明",
@@ -492,7 +511,7 @@ const BRIEF_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
 規則:
 - modeが外ランならkmを入れ、indoorは空配列にする。
 - modeが室内トレまたは回復ならkmはnull、indoorを埋める。
-- 「今朝の要望」があれば最優先で反映する。時間がない・坂を走りたい・
+- 「今朝のやりとり」に彼の言葉があれば最優先で反映する。時間がない・坂を走りたい・
   膝が痛い・気分が乗らない・遠くまで行きたい等、内容に応じて距離も方角も
   メニューも変える。要望に応えた結果を reason で説明すること。
   ただし痛みや不調の訴えには無理をさせない方向で応じる。
@@ -570,7 +589,7 @@ function renderBrief(fromCache){
     $("#whyIn").textContent = [brief.reason, brief.note].filter(Boolean).join(" ");
   }
   renderStretch();
-  renderDiet();
+  renderDiet(); renderTally();
   if(!fromCache) saveDay();
 }
 function renderStretch(){
@@ -894,6 +913,121 @@ async function readShots(){
   $("#ocrBtn").disabled = false;
 }
 
+/* ---------------- 積み上げ（計算だけ。APIは使わない） ----------------
+   褒め言葉が空回りしないよう、根拠になる数字をここで出しておく。 */
+function streak(){
+  const done = new Set(DB.records.filter(r=>r.type && r.type!=="未実施").map(r=>r.date));
+  let n = 0, d = new Date();
+  // 今日がまだなら昨日から数える
+  if(!done.has(iso(d))) d.setDate(d.getDate()-1);
+  while(done.has(iso(d))){ n++; d.setDate(d.getDate()-1); }
+  return n;
+}
+function monthKm(){
+  const m = iso(new Date()).slice(0,7);
+  return DB.records.filter(r=>r.date.startsWith(m))
+                   .reduce((s,r)=>s+(r.dist||0), 0);
+}
+function totalKm(){ return DB.records.reduce((s,r)=>s+(r.dist||0), 0); }
+/* 距離帯ごとのベストペース。同じくらいの距離で速くなったかを見るため */
+function bestPace(km){
+  const near = DB.records.filter(r=>r.dist && r.pace && Math.abs(r.dist-km) <= 0.75);
+  const secs = near.map(r=>({r, s:paceSec(r.pace)})).filter(x=>x.s);
+  if(!secs.length) return null;
+  secs.sort((a,b)=>a.s-b.s);
+  return secs[0];
+}
+function tallies(){
+  return {連続日数:streak(), 今月の距離:Number(monthKm().toFixed(1)),
+          通算距離:Number(totalKm().toFixed(1)), 記録数:DB.records.length};
+}
+function renderTally(){
+  const t = tallies();
+  $("#tally").innerHTML =
+    `<div>連続<b>${t.連続日数}</b>日</div>
+     <div>今月<b>${t.今月の距離}</b>km</div>
+     <div>通算<b>${t.通算距離}</b>km</div>`;
+}
+
+/* ---------------- コーチとのやりとり ---------------- */
+let chat = [];
+
+const COACH_PROMPT = `あなたは名古屋市緑区に住む20代男性のランニングコーチです。
+彼は滝ノ水中央公園を起終点に毎朝走り、体重60kgを目標に減量しています。
+完全休養日は作らず、疲れている日も何かはやる方針です。
+
+話し方の指針:
+- 一人のコーチとして、対等に、率直に話す。敬語は使いすぎない。
+- 褒めるときは必ず具体的な数字を根拠にする。「すごいですね」だけは言わない。
+  「先週の5kmより22秒速い」のように、データのどこを見てそう言ったのかを示す。
+- 良くない兆候があれば率直に伝える。除脂肪量が落ちている、
+  距離の伸ばし方が急、といったことは遠慮せずに指摘する。
+- お世辞は言わない。停滞しているときに無理に持ち上げない。
+  淡々と事実を確認して、次にやることを1つ示すほうが役に立つ。
+- 長く話さない。2〜4文。相手はスマホで、走る前か走った直後に読んでいる。
+- 質問には普通に答える。走りと体づくりの話題から外れても構わない。
+
+体調不良や痛みを訴えられたときは、無理をさせない方向で答える。
+医療的な判断が必要そうなら、素直に医療機関を勧める。`;
+
+function renderChat(waiting){
+  const html = chat.map(m=>
+    `<div class="bub ${m.role==="user"?"me":"coach"}">${
+      m.content.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/\n/g,"<br>")}</div>`).join("");
+  $("#chat").innerHTML = html + (waiting?`<div class="bub coach wait">考え中…</div>`:"");
+  $("#chat").scrollTop = $("#chat").scrollHeight;
+}
+function coachContext(){
+  return {
+    今日: iso(new Date()),
+    今朝の指示: brief ? {内容:brief.mode, 距離:brief.km, 理由:brief.reason} : "未生成",
+    今日のルート: todayRoute ? {距離:todayRoute.km, 方角:todayRoute.dir,
+                              形:todayRoute.shape, 登り:todayRoute.ascent} : "なし",
+    天気: wxData ? {気温:wxData.temp, 天気:WX[wxData.code], 降水:wxData.prec} : "不明",
+    積み上げ: tallies(),
+    目標体重: Number($("#goalW").value) || 60,
+    直近の記録: DB.records.slice(-14)
+  };
+}
+async function askCoach(text, opts){
+  if(!$("#token").value.trim()){
+    chat.push({role:"assistant", content:"設定タブで合言葉を入れてください。"});
+    renderChat(); return;
+  }
+  if(text) chat.push({role:"user", content:text});
+  renderChat(true);
+  $("#sendBtn").disabled = true;
+  try{
+    const msgs = [{role:"user", content:
+      "以下が現在の状況です。これを踏まえて会話してください。\n" +
+      JSON.stringify(coachContext(), null, 1)},
+      {role:"assistant", content:"了解。状況は把握した。"}
+    ].concat(chat.slice(-12));
+    const j = await callFn("ai", null, {model:"claude-sonnet-4-6", max_tokens:400,
+      system: COACH_PROMPT, messages: msgs});
+    const txt = j.content.filter(b=>b.type==="text").map(b=>b.text).join("").trim();
+    chat.push({role:"assistant", content: txt || "うまく返せなかった。もう一度どうぞ。"});
+  }catch(e){
+    chat.push({role:"assistant", content:"つながらなかった（"+e.message+"）。"});
+  }
+  $("#sendBtn").disabled = false;
+  renderChat();
+  saveDay();
+}
+/* 記録を保存したら、その日の内容についてコーチが一言 */
+function commentOnRecord(rec){
+  const bits = [`${rec.date} の記録を保存した。`, `内容: ${rec.type}`];
+  if(rec.dist) bits.push(`${rec.dist}km`);
+  if(rec.time) bits.push(`${rec.time}`);
+  if(rec.pace) bits.push(`ペース ${rec.pace}`);
+  if(rec.hard) bits.push(`きつさ ${rec.hard}/5`);
+  if(rec.memo) bits.push(`メモ: ${rec.memo}`);
+  const pb = rec.dist ? bestPace(rec.dist) : null;
+  if(pb) bits.push(`この距離帯のこれまでの最速は ${pb.r.date} の ${pb.r.pace}`);
+  bits.push("今日の走りを評価して、次につながる一言をください。");
+  askCoach(bits.join(" / "));
+}
+
 /* ---------------- 記録一覧 ---------------- */
 const shiftDate = (d, days) => {
   const t = new Date(d + "T12:00:00");
@@ -1059,8 +1193,9 @@ function saveRecord(){
     rec.dir = todayRoute.dir;
     const r = DB.routes.find(x=>x.id===todayRoute.id); if(r) r.used=(r.used||0)+1;
   }
-  renderCharts(); renderRecords(); renderDiet();
-  toast($("#saveMsg"), i>=0?"同じ日付の記録を上書きしました。保存するを押してください。":"追加しました。ルートタブの保存するを押してください。");
+  renderCharts(); renderRecords(); renderDiet(); renderTally();
+  toast($("#saveMsg"), i>=0?"同じ日付の記録を上書きしました。設定タブの保存するを押してください。":"追加しました。設定タブの保存するを押してください。");
+  commentOnRecord(rec);
 }
 async function sync(dir){
   const m = $("#syncMsg");
@@ -1070,7 +1205,7 @@ async function sync(dir){
       const j = await callFn("data");
       DB = {records:j.records||[], routes:j.routes||[], settings:j.settings||{}};
       if(DB.settings.goalW) $("#goalW").value = DB.settings.goalW;
-      renderCharts(); renderRecords(); renderRoutes(); startBrief();
+      renderCharts(); renderRecords(); renderRoutes(); renderTally(); renderChat(); startBrief();
       toast(m,`読み込みました（記録 ${DB.records.length}件・ルート ${DB.routes.length}本）。`);
     }else{
       DB.settings = Object.assign({}, DB.settings, {goalW:Number($("#goalW").value)});
@@ -1105,7 +1240,11 @@ $("#stretchTabs").onclick = e=>{ const b=e.target.closest(".chip"); if(!b) retur
   renderStretch(); };
 $("#ocrBtn").onclick = readShots;
 $("#reqBtn").onclick = ()=>buildBrief();
-$("#request").addEventListener("keydown", e=>{ if(e.key==="Enter") buildBrief(); });
+$("#sendBtn").onclick = ()=>{
+  const t = $("#request").value.trim(); if(!t) return;
+  $("#request").value = ""; askCoach(t);
+};
+$("#request").addEventListener("keydown", e=>{ if(e.key==="Enter") $("#sendBtn").click(); });
 $("#pullBtn").onclick = ()=>pull(1);
 $("#backfillBtn").onclick = ()=>pull(30);
 $("#goalW").oninput = renderDiet;
@@ -1159,7 +1298,7 @@ $("#today").textContent = now.toLocaleDateString("ja-JP",{month:"long",day:"nume
 $("#f-date").value = iso(now);
 purgeOldDays();
 loadSettings();
-renderCharts(); renderRecords(); renderRoutes();
+renderCharts(); renderRecords(); renderRoutes(); renderTally(); renderChat();
 if($("#token").value) sync("load").then(loadWeather); else loadWeather();
 </script>
 </body>
