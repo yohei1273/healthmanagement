@@ -11,6 +11,7 @@
    ORSのround_tripはseedで大まかな方角が変わるが、どのseedがどっちを向くかは
    叩いてみないと分からない。なので多めに投げて、返ってきた線の重心が起点から
    見てどの方角にあるかを実際に測り、その中から選ぶ。
+     tol   … 距離の許容誤差。既定 0.05（±5%）
      dir   … その方角に近いものを選ぶ（北/北東/東/南東/南/南西/西/北西 か 0-359）
      avoid … 直近に走った方角。そこから一番離れたものを選ぶ */
 
@@ -72,7 +73,7 @@ export default async (req) => {
 
   const km  = Number(url.searchParams.get("km") || 5);
   const n   = Math.min(Number(url.searchParams.get("n") || 8), 12);
-  const tol = Number(url.searchParams.get("tol") || 0.03);
+  const tol = Number(url.searchParams.get("tol") || 0.05);  // 5km なら ±250m
   if(!(km >= 1 && km <= 30)) return bad("km は 1〜30 で指定してください");
 
   const want  = toBearing(url.searchParams.get("dir"));
