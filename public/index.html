@@ -55,6 +55,9 @@ h2{font-size:14px;font-weight:700;margin-bottom:10px}
   font-variant-numeric:tabular-nums}
 .stat .d{font-family:var(--num);font-size:12px}
 .stat .d.dn{color:var(--green)}.stat .d.up{color:var(--vermilion)}
+.req{border-top:1px solid var(--rule);margin-top:16px;padding-top:14px}
+.req input{margin-bottom:8px}
+.req button{width:100%}
 .flow{list-style:none;font-size:13.5px}
 .flow li{padding:7px 0 7px 22px;position:relative;border-bottom:1px dashed var(--rule)}
 .flow li:last-child{border-bottom:0}
@@ -110,6 +113,15 @@ legend{font-size:12px;color:var(--sub);padding-bottom:6px}
 .chip{border:1px solid var(--rule);background:transparent;color:var(--sub);
   padding:5px 11px;font-size:13px;font-family:var(--num);width:auto}
 .chip.on{border-color:var(--ink);background:var(--ink);color:var(--panel)}
+.recrow{display:flex;align-items:center;gap:10px;padding:10px 0;
+  border-bottom:1px solid var(--rule)}
+.recrow .dt{font-family:var(--num);font-size:14px;font-weight:600;width:52px;
+  font-variant-numeric:tabular-nums;cursor:pointer}
+.recrow .sm2{flex:1;font-size:12.5px;color:var(--sub);cursor:pointer}
+.recrow .ops{display:flex;gap:4px}
+.recrow .ops button{width:auto;padding:4px 7px;font-size:11.5px;
+  background:transparent;color:var(--sub);border-color:var(--rule);font-family:var(--num)}
+.recrow .ops button.del{color:var(--vermilion)}
 .log{font-family:var(--num);font-size:12px;color:var(--sub);max-height:150px;
   overflow:auto;border-top:1px solid var(--rule);margin-top:12px;padding-top:8px}
 .log div{padding:1px 0}
@@ -155,6 +167,11 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
       <div id="indoor" style="display:none">
         <ul class="menu" id="indoorMenu"></ul>
         <div class="why" id="whyIn"></div>
+      </div>
+      <div class="req">
+        <label for="request">今朝の要望</label>
+        <input type="text" id="request" placeholder="例）今日は30分しかない／坂を走りたい／膝が張ってる">
+        <button class="ghost sm" id="reqBtn">組み直す</button>
       </div>
     </div>
 
@@ -205,7 +222,7 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
   <section class="tab" id="t-log">
     <div class="card">
       <h2>体組成を取り込む</h2>
-      <p class="msg">ヘルスプラネットから、体重・体脂肪率・筋肉量・基礎代謝などを自動で取ってきます。</p>
+      <p class="msg">ヘルスプラネットから体重・体脂肪率・BMIを自動で取ってきます。筋肉量や基礎代謝はタニタがAPI提供を終了しているので、必要な日は下のスクショから読ませてください。</p>
       <div class="grid">
         <button id="pullBtn">今日の体組成</button>
         <button class="ghost" id="backfillBtn">過去30日をまとめて</button>
@@ -214,8 +231,8 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
     </div>
 
     <div class="card">
-      <h2>ランのスクショを読む</h2>
-      <p class="msg">Nike Run Club の結果画面を選ぶと、距離・時間・ペース・消費カロリー・高低差・ピッチを読み取ってフォームに入れます。</p>
+      <h2>スクショを読む</h2>
+      <p class="msg">Nike Run Club の結果画面から距離・時間・ペース・消費カロリー・高低差・ピッチを読み取ります。ヘルスプラネットの画面も一緒に選べば、筋肉量・基礎代謝・体内年齢なども埋まります。</p>
       <div class="field"><input type="file" id="shots" accept="image/*" multiple></div>
       <button id="ocrBtn">読み取る</button>
       <div class="msg" id="ocrMsg"></div>
@@ -226,7 +243,7 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
       <div class="grid">
         <div class="field"><label for="f-date">日付</label><input type="date" id="f-date"></div>
         <div class="field"><label for="f-type">運動内容</label>
-          <select id="f-type"><option>外ラン</option><option>室内トレ</option><option>休養</option></select></div>
+          <select id="f-type"><option>外ラン</option><option>室内トレ</option><option>回復</option></select></div>
       </div>
       <fieldset><legend>体組成</legend>
         <div class="grid3">
@@ -260,6 +277,12 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
       <div class="field"><label for="f-memo">メモ</label><textarea id="f-memo" rows="2"></textarea></div>
       <button id="saveBtn">記録を保存</button>
       <div class="msg" id="saveMsg"></div>
+    </div>
+
+    <div class="card">
+      <h2>記録一覧</h2>
+      <p class="msg">行をタップすると上のフォームに読み込まれます。日付がずれているものは ±1日 で直せます。</p>
+      <ul class="rlist" id="recList"></ul>
     </div>
 
     <div class="card">
@@ -299,18 +322,16 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
       <div class="grid">
         <div class="field"><label for="goalW">目標体重 kg</label>
           <input type="number" step="0.5" id="goalW" value="60"></div>
-        <div class="field"><label for="anthKey">Anthropic APIキー</label>
-          <input type="password" id="anthKey" placeholder="指示とスクショ読み取り用"></div>
+        <div class="field"><label for="token">合言葉</label>
+          <input type="password" id="token" placeholder="端末ごとに1回だけ"></div>
       </div>
       <div class="field"><label for="fnBase">Netlify Functions のベースURL</label>
         <input type="text" id="fnBase" placeholder="/.netlify/functions" value="/.netlify/functions"></div>
-      <div class="field"><label for="npoint">npoint.io の JSON URL</label>
-        <input type="text" id="npoint" placeholder="https://api.npoint.io/xxxxxxxx"></div>
       <div class="grid">
         <button class="ghost" id="loadBtn">読み込む</button>
         <button class="ghost" id="syncBtn">保存する</button>
       </div>
-      <div class="msg" id="syncMsg">未設定のあいだはブラウザのメモリ上だけで動きます。リロードすると消えるので、npoint.io の URL を入れてください。</div>
+      <div class="msg" id="syncMsg">APIキーと保存先はサーバー側にあります。新しい端末で開いたときは合言葉だけ入れてください。</div>
     </div>
   </section>
 </div>
@@ -325,7 +346,6 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
 <script>
 /* ---------------- 設定 ---------------- */
 const START = [35.0839, 136.9736];      // 滝ノ水中央公園
-const NPOINT_URL = "";                   // ここに固定してもOK
 const ORS_URL = "https://api.heigit.org/openrouteservice/v2/directions/foot-walking/geojson";
 const TILE = "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
 const TILE_ATTR = '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>';
@@ -344,7 +364,12 @@ let map, rmap, mapLine, rmapLine;
 
 /* ---------------- 小道具 ---------------- */
 const $ = s => document.querySelector(s);
-const iso = d => d.toISOString().slice(0,10);
+/* toISOString はUTCなので、朝6時のJSTだと前日の日付になってしまう。
+   端末のローカル日付を使う。 */
+const iso = d => {
+  const t = new Date(d.getTime() - d.getTimezoneOffset()*60000);
+  return t.toISOString().slice(0,10);
+};
 const uid = () => Math.random().toString(36).slice(2,9);
 function toast(el,txt,bad){ el.textContent = txt; el.className = "msg"+(bad?" err":""); }
 
@@ -377,6 +402,39 @@ async function loadWeather(){
    直近の記録・天気・目標・ルート台帳をまとめて渡して、判断はモデルに任せる。 */
 let brief = null;
 
+/* 指示は1日1回だけ組む。同じ日に開き直しても、その朝の内容とルートが
+   そのまま出るようにキャッシュする。要望を出したときだけ組み直す。 */
+const dayKey = () => "asaran:day:" + iso(new Date());
+function saveDay(){
+  try{ localStorage.setItem(dayKey(), JSON.stringify({brief, route:todayRoute})); }catch(e){}
+}
+function loadDay(){
+  try{
+    const s = localStorage.getItem(dayKey());
+    return s ? JSON.parse(s) : null;
+  }catch(e){ return null; }
+}
+function purgeOldDays(){
+  try{
+    const keep = dayKey();
+    for(let i=localStorage.length-1; i>=0; i--){
+      const k = localStorage.key(i);
+      if(k && k.startsWith("asaran:day:") && k !== keep) localStorage.removeItem(k);
+    }
+  }catch(e){}
+}
+/* 起動時の入口。キャッシュがあればAPIを呼ばずにそれを出す。 */
+function startBrief(){
+  const c = loadDay();
+  if(c && c.brief){
+    brief = c.brief;
+    todayRoute = c.route || null;
+    renderBrief(true);
+    return;
+  }
+  buildBrief();
+}
+
 function briefContext(){
   const recent = DB.records.slice(-21).map(r=>({
     日付:r.date, 内容:r.type, 体重:r.w, 体脂肪率:r.fat, 筋肉量:r.mus,
@@ -384,8 +442,10 @@ function briefContext(){
     きつさ:r.hard, メモ:r.memo, 走った方角:r.dir
   }));
   const routes = [...new Set(DB.routes.map(r=>r.target))].sort((a,b)=>a-b);
+  const req = ($("#request") && $("#request").value.trim()) || "";
   return {
     今日: iso(new Date()),
+    今朝の要望: req || "なし",
     目標体重: (DB.settings && DB.settings.goalW) || 60,
     現在の天気: wxData ? {
       気温:wxData.temp, 体感:wxData.feels, 天気:WX[wxData.code]||"不明",
@@ -403,13 +463,17 @@ const BRIEF_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
 以下のデータを読んで、今朝やるべきことを決めてください。
 機械的な計算式ではなく、記録の流れ・きつさの言葉・天気・目標への進み具合を
 総合的に見て、今日の彼にとって一番いい判断をしてください。
-数字を少し変えるだけの無難な提案より、必要なら休養を勧める、
-必要なら強度を上げる、といった判断をしてください。
+数字を少し変えるだけの無難な提案より、必要なら強度を大きく落とす、必要なら上げる、といった判断をしてください。
+
+彼は毎日必ず何かをやります。完全な休養日は作りません。
+疲労が強い日や故障が心配な日は "回復" を選び、散歩・軽い体操・
+ストレッチ中心の、負荷はほぼゼロだが体は動かす内容にしてください。
+「今日は休んでください」で終わらせず、必ず具体的なメニューを出すこと。
 
 出力は次のJSONのみ。前置き・説明・コードフェンスは不要です。
 
 {
- "mode": "外ラン" | "室内トレ" | "休養",
+ "mode": "外ラン" | "室内トレ" | "回復",
  "km": 数値またはnull,
  "direction": "北"|"北東"|"東"|"南東"|"南"|"南西"|"西"|"北西"|null,
  "headline": "今朝の一言。15文字以内",
@@ -422,36 +486,37 @@ const BRIEF_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
 
 規則:
 - modeが外ランならkmを入れ、indoorは空配列にする。
-- modeが室内トレまたは休養ならkmはnull、indoorを埋める。
+- modeが室内トレまたは回復ならkmはnull、indoorを埋める。
+- 「今朝の要望」があれば最優先で反映する。時間がない・坂を走りたい・
+  膝が痛い・気分が乗らない・遠くまで行きたい等、内容に応じて距離も方角も
+  メニューも変える。要望に応えた結果を reason で説明すること。
+  ただし痛みや不調の訴えには無理をさせない方向で応じる。
 - directionは今朝どちら方面へ走るか。直近数日の「走った方角」を見て、
   同じ方面が続かないように変える。特に理由がなければ直近3日と違う方角にする。
   景色を変えたい、向かい風を避けたい、坂を避けたいといった理由があればそれに従う。
   こだわりがなければ null にすると自動で直近から一番離れた方角が選ばれる。
 - stretchPreは動的ストレッチのみ。走る直前の静的ストレッチは筋出力を下げるので入れない。
 - stretchPostは静的ストレッチ。前回のきつさや筋肉痛の記述に応じて内容を変える。
-- 休養の日もstretchPreは軽い内容にして、stretchPostは省いてよい。
+- 回復の日のindoorは、散歩20分・ラジオ体操・可動域ドリルのような軽いもので埋める。
 - 体重の増減だけでなく、体脂肪率と筋肉量の動きを見て判断する。`;
 
 async function buildBrief(){
-  const key = ($("#anthKey")&&$("#anthKey").value.trim()) || "";
-  if(!key){ fallbackBrief("APIキーが未設定です。設定タブで入れると、その日の記録に合わせた指示が出ます。"); return; }
+  if(!$("#token").value.trim()){
+    fallbackBrief("合言葉が未設定です。設定タブで入れると、その日の記録に合わせた指示が出ます。"); return;
+  }
   $("#verdict").textContent = "判断中…";
+  $("#reqBtn").disabled = true;
   try{
-    const res = await fetch("https://api.anthropic.com/v1/messages",{
-      method:"POST",
-      headers:{"Content-Type":"application/json","x-api-key":key,
-        "anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-      body: JSON.stringify({model:"claude-sonnet-4-6", max_tokens:1500,
-        messages:[{role:"user", content: BRIEF_PROMPT + "\n\n" +
-          JSON.stringify(briefContext(), null, 1)}]})
-    });
-    if(!res.ok) throw new Error(`API ${res.status}`);
-    const j = await res.json();
+    const j = await callFn("ai", null, {model:"claude-sonnet-4-6", max_tokens:1500,
+      messages:[{role:"user", content: BRIEF_PROMPT + "\n\n" +
+        JSON.stringify(briefContext(), null, 1)}]});
     const txt = j.content.filter(b=>b.type==="text").map(b=>b.text).join("")
                  .replace(/```json|```/g,"").trim();
     brief = JSON.parse(txt);
+    todayRoute = null;
     renderBrief();
   }catch(e){ fallbackBrief("指示を組み立てられませんでした（"+e.message+"）。"); }
+  $("#reqBtn").disabled = false;
 }
 
 /* APIが使えないときだけ動く最小限の代替。判断はせず、直前と同じ内容を出す。 */
@@ -471,7 +536,7 @@ function fallbackBrief(msg){
 }
 
 let stretchMode = "pre";
-function renderBrief(){
+function renderBrief(fromCache){
   if(!brief) return;
   const v = $("#verdict");
   v.textContent = brief.mode;
@@ -484,7 +549,8 @@ function renderBrief(){
     $("#targetKm").textContent = Number(brief.km).toFixed(1);
     $("#why").textContent = brief.reason || "";
     $("#warnBox").innerHTML = brief.note ? `<div class="warn">${brief.note}</div>` : "";
-    pickRoute(Number(brief.km), null, brief.direction);
+    if(fromCache && todayRoute) showTodayRoute();      // その朝に作ったルートをそのまま出す
+    else pickRoute(Number(brief.km), null, brief.direction);
   }else{
     $("#outdoor").style.display="none"; $("#indoor").style.display="block";
     $("#routeCard").style.display="none";
@@ -494,6 +560,7 @@ function renderBrief(){
   }
   renderStretch();
   renderDiet();
+  if(!fromCache) saveDay();
 }
 function renderStretch(){
   if(!brief) return;
@@ -542,7 +609,7 @@ function renderDiet(){
 
 /* ---------------- 天気の判定に使う値だけ ---------------- */
 function lastRun(){ return [...DB.records].reverse().find(r=>r.type==="外ラン"&&r.dist); }
-function decide(){ buildBrief(); }
+function decide(){ startBrief(); }
 
 /* ---------------- ルート選択 ---------------- */
 /* 毎朝その場で新しい周回を作る。作れなければ台帳から選ぶ。 */
@@ -550,7 +617,7 @@ async function pickRoute(km, avoidId, dir){
   $("#todayMeta").innerHTML = `<span>ルートを作成中…</span>`;
   try{
     todayRoute = await freshRoute(km, dir);
-    showTodayRoute();
+    showTodayRoute(); saveDay();
     return;
   }catch(e){ pickFromLibrary(km, avoidId, e.message); }
 }
@@ -564,7 +631,7 @@ function pickFromLibrary(km, avoidId, why){
   }
   src.sort((a,b)=>(a.used||0)-(b.used||0));
   todayRoute = src[0];
-  showTodayRoute();
+  showTodayRoute(); saveDay();
   if(why) $("#todayMeta").insertAdjacentHTML("beforeend",
     `<span class="err">新規生成に失敗したので台帳から選びました（${why}）</span>`);
 }
@@ -690,9 +757,11 @@ function showSelRoute(){
 /* ---------------- 連携（Netlify Functions 経由） ---------------- */
 const fnBase = () => ($("#fnBase").value||"/.netlify/functions").replace(/\/$/,"");
 
-async function callFn(name, params){
-  const q = new URLSearchParams(params).toString();
-  const res = await fetch(`${fnBase()}/${name}?${q}`);
+async function callFn(name, params, body){
+  const q = new URLSearchParams({...(params||{}), t:$("#token").value.trim()}).toString();
+  const res = await fetch(`${fnBase()}/${name}?${q}`, body ? {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
+  } : undefined);
   const j = await res.json().catch(()=>({error:"レスポンスを解釈できません"}));
   if(!res.ok) throw new Error(j.error||`${name} ${res.status}`);
   return j;
@@ -710,7 +779,7 @@ async function pull(days){
       const t = iso(new Date());
       const row = body.find(r=>r.date===t) || body[body.length-1];
       fillForm(row);
-      toast(m, `${row.date} の体組成を入れました。ランがあればスクショを読ませてください。`);
+      toast(m, `${row.date} の体重・体脂肪率を入れました。ランがあればスクショを読ませてください。`);
     }else{
       let n=0;
       for(const row of body){
@@ -719,7 +788,7 @@ async function pull(days){
         else { DB.records.push(Object.assign({type:"室内トレ"}, row)); n++; }
       }
       DB.records.sort((a,b)=>a.date.localeCompare(b.date));
-      renderCharts(); renderDiet();
+      renderCharts(); renderRecords(); renderDiet();
       toast(m, `${body.length}日分を反映（新規 ${n}件）。設定タブの保存するを押してください。`);
     }
     if(hp.newRefreshToken)
@@ -760,8 +829,8 @@ function fileToB64(f){
   });
 }
 async function readShots(){
-  const key = $("#anthKey").value.trim(), files = [...$("#shots").files], m = $("#ocrMsg");
-  if(!key){ toast(m,"設定タブで Anthropic APIキーを入れてください",true); return; }
+  const files = [...$("#shots").files], m = $("#ocrMsg");
+  if(!$("#token").value.trim()){ toast(m,"設定タブで合言葉を入れてください",true); return; }
   if(!files.length){ toast(m,"画像を選んでください",true); return; }
   $("#ocrBtn").disabled = true; toast(m,"読み取り中…");
   try{
@@ -771,15 +840,8 @@ async function readShots(){
         media_type: f.type==="image/png"?"image/png":"image/jpeg", data: await fileToB64(f)}});
     }
     content.push({type:"text", text:PROMPT});
-    const res = await fetch("https://api.anthropic.com/v1/messages",{
-      method:"POST",
-      headers:{"Content-Type":"application/json","x-api-key":key,
-        "anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-      body: JSON.stringify({model:"claude-sonnet-4-6", max_tokens:1000,
-        messages:[{role:"user", content}]})
-    });
-    if(!res.ok) throw new Error(`API ${res.status}`);
-    const j = await res.json();
+    const j = await callFn("ai", null, {model:"claude-sonnet-4-6", max_tokens:1000,
+      messages:[{role:"user", content}]});
     const txt = j.content.filter(b=>b.type==="text").map(b=>b.text).join("")
                  .replace(/```json|```/g,"").trim();
     const data = JSON.parse(txt);
@@ -791,6 +853,64 @@ async function readShots(){
     toast(m, `${n}項目を入れました。値を確認して保存してください。`);
   }catch(e){ toast(m,"読み取りに失敗しました: "+e.message, true); }
   $("#ocrBtn").disabled = false;
+}
+
+/* ---------------- 記録一覧 ---------------- */
+const shiftDate = (d, days) => {
+  const t = new Date(d + "T12:00:00");
+  t.setDate(t.getDate() + days);
+  return iso(t);
+};
+function renderRecords(){
+  const R = [...DB.records].reverse();
+  $("#recList").innerHTML = R.length ? R.map(r=>{
+    const bits = [r.type];
+    if(r.dist) bits.push(`${r.dist}km`);
+    if(r.pace) bits.push(r.pace);
+    if(r.w) bits.push(`${r.w}kg`);
+    return `<li class="recrow" data-date="${r.date}">
+      <span class="dt">${r.date.slice(5).replace("-","/")}</span>
+      <span class="sm2">${bits.join(" ・ ")}</span>
+      <span class="ops">
+        <button data-op="-1">−1日</button>
+        <button data-op="+1">＋1日</button>
+        <button data-op="del" class="del">削除</button>
+      </span></li>`;
+  }).join("") : `<li class="msg">まだ記録がありません。</li>`;
+}
+function moveRecord(date, days){
+  const i = DB.records.findIndex(r=>r.date===date);
+  if(i<0) return;
+  const to = shiftDate(date, days);
+  const j = DB.records.findIndex(r=>r.date===to);
+  if(j>=0 && !confirm(`${to} には既に記録があります。統合しますか？`)) return;
+  const rec = Object.assign({}, DB.records[i], {date:to});
+  DB.records.splice(i,1);
+  const k = DB.records.findIndex(r=>r.date===to);
+  if(k>=0) DB.records[k] = Object.assign({}, DB.records[k], rec);
+  else DB.records.push(rec);
+  DB.records.sort((a,b)=>a.date.localeCompare(b.date));
+  afterEdit(`${date} を ${to} に移しました。`);
+}
+function removeRecord(date){
+  if(!confirm(`${date} の記録を削除しますか？`)) return;
+  DB.records = DB.records.filter(r=>r.date!==date);
+  afterEdit(`${date} を削除しました。`);
+}
+function editRecord(date){
+  const r = DB.records.find(x=>x.date===date);
+  if(!r) return;
+  for(const [k,sel] of Object.entries(FIELDS)) $(sel).value = r[k] ?? "";
+  $("#f-date").value = r.date;
+  $("#f-type").value = r.type || "外ラン";
+  $("#f-hard").value = r.hard || 3;
+  $("#f-memo").value = r.memo || "";
+  toast($("#saveMsg"), `${date} を読み込みました。直して保存してください。`);
+  $("#f-date").scrollIntoView({behavior:"smooth", block:"center"});
+}
+function afterEdit(msg){
+  renderRecords(); renderCharts(); renderDiet();
+  toast($("#saveMsg"), msg + " 設定タブの保存するを押すと確定します。");
 }
 
 /* ---------------- グラフ ---------------- */
@@ -900,24 +1020,23 @@ function saveRecord(){
     rec.dir = todayRoute.dir;
     const r = DB.routes.find(x=>x.id===todayRoute.id); if(r) r.used=(r.used||0)+1;
   }
-  renderCharts(); decide();
+  renderCharts(); renderRecords(); renderDiet();
   toast($("#saveMsg"), i>=0?"同じ日付の記録を上書きしました。保存するを押してください。":"追加しました。ルートタブの保存するを押してください。");
 }
 async function sync(dir){
-  const url = ($("#npoint").value||NPOINT_URL).trim();
   const m = $("#syncMsg");
-  if(!url){ toast(m,"npoint.io の URL を入れてください",true); return; }
+  if(!$("#token").value.trim()){ toast(m,"合言葉を入れてください",true); return; }
   try{
     if(dir==="load"){
-      const r = await fetch(url,{cache:"no-store"}); const j = await r.json();
-      if(j && Array.isArray(j.records)) DB = {records:j.records, routes:j.routes||[], settings:j.settings||{}};
-      if(DB.settings && DB.settings.goalW) $("#goalW").value = DB.settings.goalW;
-      renderCharts(); renderRoutes(); decide(); toast(m,"読み込みました。");
+      const j = await callFn("data");
+      DB = {records:j.records||[], routes:j.routes||[], settings:j.settings||{}};
+      if(DB.settings.goalW) $("#goalW").value = DB.settings.goalW;
+      renderCharts(); renderRecords(); renderRoutes(); startBrief();
+      toast(m,`読み込みました（記録 ${DB.records.length}件・ルート ${DB.routes.length}本）。`);
     }else{
       DB.settings = Object.assign({}, DB.settings, {goalW:Number($("#goalW").value)});
-      const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(DB)});
-      toast(m, r.ok?"保存しました。":"保存に失敗しました（npoint の URL を確認）", !r.ok);
+      const j = await callFn("data", null, DB);
+      toast(m,`保存しました（記録 ${j.records}件・ルート ${j.routes}本）。`);
     }
   }catch(e){ toast(m,"通信に失敗しました: "+e.message,true); }
 }
@@ -946,12 +1065,21 @@ $("#stretchTabs").onclick = e=>{ const b=e.target.closest(".chip"); if(!b) retur
   $("#stretchTabs").querySelectorAll(".chip").forEach(x=>x.classList.toggle("on",x===b));
   renderStretch(); };
 $("#ocrBtn").onclick = readShots;
+$("#reqBtn").onclick = ()=>buildBrief();
+$("#request").addEventListener("keydown", e=>{ if(e.key==="Enter") buildBrief(); });
 $("#pullBtn").onclick = ()=>pull(1);
 $("#backfillBtn").onclick = ()=>pull(30);
 $("#goalW").oninput = renderDiet;
 $("#genBtn").onclick = generate;
 $("#saveBtn").onclick = saveRecord;
 $("#csvBtn").onclick = toCSV;
+$("#recList").onclick = e=>{
+  const li = e.target.closest(".recrow"); if(!li) return;
+  const date = li.dataset.date, b = e.target.closest("button");
+  if(!b){ editRecord(date); return; }
+  if(b.dataset.op === "del") removeRecord(date);
+  else moveRecord(date, Number(b.dataset.op));
+};
 $("#loadBtn").onclick = ()=>sync("load");
 $("#syncBtn").onclick = ()=>sync("save");
 $("#gpxBtn").onclick = ()=>todayRoute && download(`${todayRoute.name}.gpx`, gpx(todayRoute),"application/gpx+xml");
@@ -969,7 +1097,7 @@ $("#keepBtn").onclick = ()=>{
 };
 
 /* 設定は端末に覚えさせる（自分のiPhoneでしか開かない前提） */
-const REMEMBER = ["npoint","anthKey","fnBase","goalW"];
+const REMEMBER = ["token","fnBase","goalW"];
 function loadSettings(){
   try{ for(const id of REMEMBER){
     const v = localStorage.getItem("asaran:"+id);
@@ -984,10 +1112,10 @@ REMEMBER.forEach(id=>$("#"+id).addEventListener("change", saveSettings));
 const now = new Date();
 $("#today").textContent = now.toLocaleDateString("ja-JP",{month:"long",day:"numeric",weekday:"short"});
 $("#f-date").value = iso(now);
-$("#npoint").value = NPOINT_URL;
+purgeOldDays();
 loadSettings();
-renderCharts(); renderRoutes();
-if($("#npoint").value) sync("load").then(loadWeather); else loadWeather();
+renderCharts(); renderRecords(); renderRoutes();
+if($("#token").value) sync("load").then(loadWeather); else loadWeather();
 </script>
 </body>
 </html>

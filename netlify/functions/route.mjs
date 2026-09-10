@@ -67,6 +67,9 @@ export default async (req) => {
   if(!key) return bad("ORS_API_KEY が未設定です");
 
   const url = new URL(req.url);
+  if(process.env.APP_TOKEN && url.searchParams.get("t") !== process.env.APP_TOKEN)
+    return bad("合言葉が違います", 401);
+
   const km  = Number(url.searchParams.get("km") || 5);
   const n   = Math.min(Number(url.searchParams.get("n") || 8), 12);
   const tol = Number(url.searchParams.get("tol") || 0.03);

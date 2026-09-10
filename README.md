@@ -4,6 +4,8 @@
 public/index.html                    画面
 netlify/functions/healthplanet.mjs   体組成をタニタから取ってくる
 netlify/functions/route.mjs          周回ルートを作る
+netlify/functions/ai.mjs             Anthropic API への中継
+netlify/functions/data.mjs           記録の読み書き
 netlify.toml
 ```
 
@@ -73,14 +75,11 @@ ORSのseedはどっちを向くか事前に分からないので、測ってか�
 
 ## 4. サイト側の設定
 
-設定タブで入れるもの（端末に保存されるので初回だけ）:
+APIキーと保存先URLはすべて Netlify の環境変数にあり、ブラウザには出ません。
+新しい端末やブラウザでサイトを開いたときに入れるのは **合言葉（APP_TOKEN）だけ** です。
+設定は端末ごとに保存されるので、入力は端末につき1回です。
 
-- 目標体重（60kg）
-- Anthropic APIキー — 毎朝の指示とスクショ読み取り用
-- Netlify Functions のベースURL — 既定の `/.netlify/functions` のままでOK
-- npoint.io の URL — 手順1のもの
-
-OpenRouteService のキーはサーバー側に置くので、サイトには入力しません。
+目標体重は npoint 側に保存されるので、どの端末でも共通です。
 
 ## 環境変数まとめ
 
@@ -89,6 +88,9 @@ OpenRouteService のキーはサーバー側に置くので、サイトには入
 | `HP_CLIENT_ID` / `HP_CLIENT_SECRET` | Health Planet アプリ |
 | `HP_REFRESH_TOKEN` | Health Planet 認可済みトークン |
 | `ORS_API_KEY` | OpenRouteService（account.heigit.org で発行） |
+| `ANTHROPIC_API_KEY` | 毎朝の指示とスクショ読み取り |
+| `NPOINT_URL` | 記録の保存先（手順1のURL） |
+| `APP_TOKEN` | 端末で入力する合言葉。適当なランダム文字列でよい |
 
 環境変数を追加・変更したら、そのつど再デプロイしないと反映されません。
 

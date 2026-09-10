@@ -12,11 +12,12 @@ const TOKEN_URL = "https://www.healthplanet.jp/oauth/token";
 const DATA_URL  = "https://www.healthplanet.jp/status/innerscan.json";
 const REDIRECT  = "https://www.healthplanet.jp/success.html";
 
-// 6021 体重 / 6022 体脂肪率 / 6023 筋肉量 / 6024 筋肉スコア
-// 6025 内臓脂肪レベル2 / 6026 内臓脂肪レベル / 6027 基礎代謝量
-// 6028 体内年齢 / 6029 推定骨量
-const TAGS_FULL = "6021,6022,6023,6024,6025,6026,6027,6028,6029";
-const TAGS_MIN  = "6021,6022";
+/* APIで取れるのは 6021 体重 と 6022 体脂肪率 だけ。
+   6023 筋肉量 / 6024 筋肉スコア / 6025,6026 内臓脂肪 / 6027 基礎代謝 /
+   6028 体内年齢 / 6029 推定骨量 は 2020/6/29 で連携終了している。
+   体組成計の画面には出ていてもAPIには来ないので、それらはスクショから読む。
+   将来復活したときのために MAP は残してある。HP_TAGS で上書きも可能。 */
+const TAGS = process.env.HP_TAGS || "6021,6022";
 const MAP = {6021:"w", 6022:"fat", 6023:"mus", 6024:"ms", 6026:"vis",
              6027:"bmr", 6028:"age", 6029:"bone"};
 
@@ -38,6 +39,10 @@ const stamp = (d, end) => d.replace(/-/g,"") + (end?"235959":"000000");
 
 export default async (req) => {
   const url = new URL(req.url);
+  if(process.env.APP_TOKEN && url.searchParams.get("t") !== process.env.APP_TOKEN
+     && url.searchParams.get("action") !== "exchange")
+    return bad("合言葉が違います", 401);
+
   const id = process.env.HP_CLIENT_ID, secret = process.env.HP_CLIENT_SECRET;
   if(!id || !secret) return bad("HP_CLIENT_ID / HP_CLIENT_SECRET が未設定です");
 
@@ -61,18 +66,13 @@ export default async (req) => {
       redirect_uri:REDIRECT, refresh_token:refresh, grant_type:"refresh_token"});
     const token = t.access_token;
 
-    const from = url.searchParams.get("from") || new Date(Date.now()-30*864e5).toISOString().slice(0,10);
-    const to   = url.searchParams.get("to")   || new Date().toISOString().slice(0,10);
+    // 関数はUTCで動くので、既定値は日本時間の日付にそろえる
+    const jst = ms => new Date(ms + 9*3600e3).toISOString().slice(0,10);
+    const from = url.searchParams.get("from") || jst(Date.now() - 30*864e5);
+    const to   = url.searchParams.get("to")   || jst(Date.now());
 
-    let raw;
-    try{
-      raw = await form(DATA_URL, {access_token:token, date:"1",
-        from:stamp(from), to:stamp(to,true), tag:TAGS_FULL});
-    }catch{
-      // 一部のタグが機種で使えない場合は体重と体脂肪率だけで取り直す
-      raw = await form(DATA_URL, {access_token:token, date:"1",
-        from:stamp(from), to:stamp(to,true), tag:TAGS_MIN});
-    }
+    const raw = await form(DATA_URL, {access_token:token, date:"1",
+      from:stamp(from), to:stamp(to,true), tag:TAGS});
 
     // 同じ日に複数回測っていれば、その日の最後の測定を採用する
     const byDate = {};
@@ -92,7 +92,7 @@ export default async (req) => {
       return r;
     }).sort((a,b)=>a.date.localeCompare(b.date));
 
-    const out = {records, height, count:records.length};
+    const out = {records, height, count:records.length, tags:TAGS};
     if(t.refresh_token && t.refresh_token !== refresh) out.newRefreshToken = t.refresh_token;
     return ok(out);
   }catch(e){ return bad(e.message, 502); }
