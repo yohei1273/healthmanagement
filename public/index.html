@@ -432,25 +432,43 @@ function today(){
   return DB.today;
 }
 /* 起動時の入口。その日の指示が保存されていればAPIを呼ばない。 */
+/* 走ったあとのストレッチは判断の余地がないので固定。AIを呼ばない。 */
+const POST_STRETCH = [
+  ["ふくらはぎ（壁押し）","左右 30秒"],
+  ["ハムストリング（前屈）","左右 30秒"],
+  ["大腿四頭筋（立位で足首を持つ）","左右 30秒"],
+  ["殿筋（仰向けで膝を抱える）","左右 30秒"],
+  ["腸腰筋（ランジで腰を落とす）","左右 30秒"]
+];
+/* 今日の運動が済んでいるなら、指示を組む意味がない。
+   やった内容をそのまま出して終わり。通信も待たせない。 */
+function doneBrief(done){
+  brief = {mode:done.type, km:done.dist ?? null, headline:"おつかれさま",
+           reason:"", stretchPre:[], stretchPost:POST_STRETCH, indoor:[], note:""};
+  stretchMode = "post";
+  renderBrief();
+}
+
 let briefBusy = false;
 function startBrief(){
   if(briefBusy) return;                 // 生成中に呼ばれても重ねない
   const t = today();
+  chat = t.chat || [];
+  renderChat();
   if(t.brief){
     brief = t.brief;
     todayRoute = t.route || null;
-    chat = t.chat || [];
-    renderBrief(true); renderChat();
+    renderBrief(true);
     return;
   }
-  chat = t.chat || [];
-  renderChat();
+  const done = todayRecord();
+  if(done){ doneBrief(done); return; }  // 走り終わっていればAIは不要
   buildBrief();
 }
 function saveDay(){
   const t = today();
   t.brief = brief; t.route = todayRoute; t.chat = chat;
-  save();
+  sync("save", true);            // 遅延させない。閉じても次に開いたとき残るように
 }
 
 /* 日付の引き算をモデルにさせると「最新の記録＝昨日」と決めつけて外す。
@@ -1249,8 +1267,8 @@ function saveRecord(){
   renderCharts(); renderRecords(); renderDiet(); renderTally();
   toast($("#saveMsg"), i>=0?"同じ日付の記録を上書きしました。設定タブの保存するを押してください。":"追加しました。設定タブの保存するを押してください。");
   save();
-  // その日の内容が確定したので、指示も実施済み前提で組み直す
-  if(rec.date === iso(new Date())){ today().brief = null; startBrief(); }
+  // 今日の分が確定したら、AIを呼ばずに実施済みの表示へ切り替える
+  if(rec.date === iso(new Date())) doneBrief(rec);
   else renderBrief(true);
   commentOnRecord(rec);
 }
@@ -1368,6 +1386,9 @@ renderCharts(); renderRecords(); renderRoutes(); renderTally(); renderChat();
 /* 読み込み → 天気 → 指示 の順を守る。天気が無い状態で指示を組まないため。 */
 (async () => {
   if($("#token").value) await sync("load");
+  const t = today();
+  // 保存済みの指示や実施済みの記録があれば、通信を待たずに即出す
+  if(t.brief || todayRecord()) startBrief();
   await loadWeather();
   startBrief();
 })();
