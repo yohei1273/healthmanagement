@@ -55,6 +55,8 @@ h2{font-size:14px;font-weight:700;margin-bottom:10px}
   font-variant-numeric:tabular-nums}
 .stat .d{font-family:var(--num);font-size:12px}
 .stat .d.dn{color:var(--green)}.stat .d.up{color:var(--vermilion)}
+.done{background:#E8EEE2;border-left:3px solid var(--green);padding:9px 12px;
+  font-size:13px;margin-bottom:14px}
 .tally{display:flex;gap:14px;flex-wrap:wrap;padding-bottom:12px;margin-bottom:12px;
   border-bottom:1px solid var(--rule)}
 .tally div{font-family:var(--num);font-size:12px;color:var(--sub)}
@@ -163,6 +165,7 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
   <!-- ============ 今日 ============ -->
   <section class="tab on" id="t-today">
     <div class="card">
+      <div id="doneBox"></div>
       <div class="wx" id="wx"><div class="m">天気を取得中…</div></div>
       <div class="verdict">
         <div class="k">今朝のメニュー</div>
@@ -413,7 +416,6 @@ async function loadWeather(){
   }catch(e){
     $("#wx").innerHTML = `<div class="m err">天気を取得できませんでした。<br>目視で判断してください。</div>`;
   }
-  decide();
 }
 
 /* ---------------- 今朝の指示（Claudeが組み立てる） ----------------
@@ -430,7 +432,9 @@ function today(){
   return DB.today;
 }
 /* 起動時の入口。その日の指示が保存されていればAPIを呼ばない。 */
+let briefBusy = false;
 function startBrief(){
+  if(briefBusy) return;                 // 生成中に呼ばれても重ねない
   const t = today();
   if(t.brief){
     brief = t.brief;
@@ -440,6 +444,7 @@ function startBrief(){
     return;
   }
   chat = t.chat || [];
+  renderChat();
   buildBrief();
 }
 function saveDay(){
@@ -456,8 +461,13 @@ function briefContext(){
   }));
   const routes = [...new Set(DB.routes.map(r=>r.target))].sort((a,b)=>a-b);
   const said = chat.filter(m=>m.role==="user").map(m=>m.content);
+  const done = todayRecord();
   return {
     今日: iso(new Date()),
+    今日すでに実施した内容: done ? {
+      内容:done.type, 距離:done.dist, 時間:done.time, ペース:done.pace,
+      きつさ:done.hard, メモ:done.memo
+    } : "まだ何もしていない",
     今朝のやりとり: said.length ? said : "なし",
     積み上げ: tallies(),
     目標体重: (DB.settings && DB.settings.goalW) || 60,
@@ -474,7 +484,13 @@ const BRIEF_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
 彼は毎朝、滝ノ水中央公園を起終点に走るか、天候が悪ければ室内で自重トレをします。
 目的は減量で、目標体重に向けて脂肪を落としつつ筋肉は保ちたい。
 
-以下のデータを読んで、今朝やるべきことを決めてください。
+「今日すでに実施した内容」に記録がある場合、彼はもう今日の運動を終えています。
+その場合は新しいメニューを出さず、mode はやった内容をそのまま入れ、km も実際に
+走った距離を入れて、reason ではその日の走りを踏まえた言葉をかけてください。
+stretchPost を充実させ、stretchPre は空配列にしてください。
+彼が「もう一本行きたい」と言っている場合だけ、追加のメニューを出します。
+
+以下のデータを読んで、今日やるべきことを決めてください。
 機械的な計算式ではなく、記録の流れ・きつさの言葉・天気・目標への進み具合を
 総合的に見て、今日の彼にとって一番いい判断をしてください。
 数字を少し変えるだけの無難な提案より、必要なら強度を大きく落とす、必要なら上げる、といった判断をしてください。
@@ -522,6 +538,7 @@ async function buildBrief(){
   if(!$("#token").value.trim()){
     fallbackBrief("合言葉が未設定です。設定タブで入れると、その日の記録に合わせた指示が出ます。"); return;
   }
+  briefBusy = true;
   $("#verdict").textContent = "判断中…";
   $("#reqBtn").disabled = true;
   try{
@@ -534,6 +551,7 @@ async function buildBrief(){
     todayRoute = null;
     renderBrief();
   }catch(e){ fallbackBrief("指示を組み立てられませんでした（"+e.message+"）。"); }
+  briefBusy = false;
   $("#reqBtn").disabled = false;
 }
 
@@ -554,8 +572,23 @@ function fallbackBrief(msg){
 }
 
 let stretchMode = "pre";
+function todayRecord(){
+  const t = iso(new Date());
+  const r = DB.records.find(x=>x.date===t);
+  return (r && (r.dist || r.type)) ? r : null;
+}
 function renderBrief(fromCache){
   if(!brief) return;
+  const done = todayRecord();
+  $("#doneBox").innerHTML = done
+    ? `<div class="done">今日はもう終わっています ・ ${done.type}${
+        done.dist?` ${done.dist}km`:""}${done.pace?` ・ ${done.pace}`:""}</div>`
+    : "";
+  if(done && stretchMode === "pre"){       // 走ったあとは自然と運動後を見たいはず
+    stretchMode = "post";
+    $("#stretchTabs").querySelectorAll(".chip").forEach(x=>
+      x.classList.toggle("on", x.dataset.s === "post"));
+  }
   const v = $("#verdict");
   v.textContent = brief.mode;
   v.className = "v " + (brief.mode==="外ラン" ? "out" : "in");
@@ -1191,7 +1224,7 @@ function saveRecord(){
   }
   renderCharts(); renderRecords(); renderDiet(); renderTally();
   toast($("#saveMsg"), i>=0?"同じ日付の記録を上書きしました。設定タブの保存するを押してください。":"追加しました。設定タブの保存するを押してください。");
-  save();
+  save(); renderBrief(true);
   commentOnRecord(rec);
 }
 async function sync(dir, quiet){
@@ -1203,7 +1236,7 @@ async function sync(dir, quiet){
       DB = {records:j.records||[], routes:j.routes||[],
             settings:j.settings||{}, today:j.today||null};
       if(DB.settings.goalW) $("#goalW").value = DB.settings.goalW;
-      renderCharts(); renderRecords(); renderRoutes(); renderTally(); startBrief();
+      renderCharts(); renderRecords(); renderRoutes(); renderTally();
       toast(m,`読み込みました（記録 ${DB.records.length}件・ルート ${DB.routes.length}本）。`);
     }else{
       if(saving){ save(); return; }              // 書き込み中なら少し待って再試行
@@ -1297,7 +1330,7 @@ function saveSettings(){
 }
 REMEMBER.forEach(id=>$("#"+id).addEventListener("change", ()=>{
   saveSettings();
-  if(id==="token" && $("#token").value.trim()) sync("load");
+  if(id==="token" && $("#token").value.trim()) sync("load").then(startBrief);
 }));
 
 const now = new Date();
@@ -1305,7 +1338,12 @@ $("#today").textContent = now.toLocaleDateString("ja-JP",{month:"long",day:"nume
 $("#f-date").value = iso(now);
 loadSettings();
 renderCharts(); renderRecords(); renderRoutes(); renderTally(); renderChat();
-if($("#token").value) sync("load").then(loadWeather); else loadWeather();
+/* 読み込み → 天気 → 指示 の順を守る。天気が無い状態で指示を組まないため。 */
+(async () => {
+  if($("#token").value) await sync("load");
+  await loadWeather();
+  startBrief();
+})();
 </script>
 </body>
 </html>
