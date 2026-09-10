@@ -187,7 +187,11 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
         <button class="ghost" id="keepBtn">台帳に残す</button>
         <button class="ghost" id="libBtn">台帳から選ぶ</button>
       </div>
-      <div class="chips" id="dirChips" style="margin-top:10px"></div>
+      <div class="chips" id="shapeChips" style="margin-top:10px">
+        <button class="chip on" data-shape="loop">周回</button>
+        <button class="chip" data-shape="outback">往復</button>
+      </div>
+      <div class="chips" id="dirChips"></div>
       </div>
     </div>
 
@@ -476,6 +480,7 @@ const BRIEF_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
  "mode": "外ラン" | "室内トレ" | "回復",
  "km": 数値またはnull,
  "direction": "北"|"北東"|"東"|"南東"|"南"|"南西"|"西"|"北西"|null,
+ "shape": "周回"|"往復"|null,
  "headline": "今朝の一言。15文字以内",
  "reason": "その判断の理由。彼に語りかける調子で2〜3文",
  "stretchPre": [["種目名","回数や秒数"], ...],
@@ -491,6 +496,9 @@ const BRIEF_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
   膝が痛い・気分が乗らない・遠くまで行きたい等、内容に応じて距離も方角も
   メニューも変える。要望に応えた結果を reason で説明すること。
   ただし痛みや不調の訴えには無理をさせない方向で応じる。
+- shapeはコースの形。道が入り組んでいて迷いたくない日、ペースを一定に保ちたい日、
+  途中で切り上げるかもしれない日は "往復" が向く。景色を変えたい日は "周回"。
+  こだわりがなければ null。
 - directionは今朝どちら方面へ走るか。直近数日の「走った方角」を見て、
   同じ方面が続かないように変える。特に理由がなければ直近3日と違う方角にする。
   景色を変えたい、向かい風を避けたい、坂を避けたいといった理由があればそれに従う。
@@ -550,7 +558,10 @@ function renderBrief(fromCache){
     $("#why").textContent = brief.reason || "";
     $("#warnBox").innerHTML = brief.note ? `<div class="warn">${brief.note}</div>` : "";
     if(fromCache && todayRoute) showTodayRoute();      // その朝に作ったルートをそのまま出す
-    else pickRoute(Number(brief.km), null, brief.direction);
+    else {
+      if(brief.shape) shapeMode = brief.shape === "往復" ? "outback" : "loop";
+      pickRoute(Number(brief.km), null, brief.direction);
+    }
   }else{
     $("#outdoor").style.display="none"; $("#indoor").style.display="block";
     $("#routeCard").style.display="none";
@@ -642,6 +653,7 @@ function showTodayRoute(){
     `<span>実距離 <b>${r.km.toFixed(2)}</b> km</span>
      <span>登り <b>${Math.round(r.ascent)}</b> m</span>
      ${r.dir?`<span>方角 <b>${r.dir}</b></span>`:""}
+     ${r.turnKm?`<span>折返し <b>${r.turnKm}</b> km地点</span>`:""}
      <span>目標 ${r.target} km${r.errPct!=null?`（誤差 ${r.errPct}%）`:""}</span>`;
   if(!map){
     map = L.map("map",{zoomControl:false,attributionControl:true}).setView(START,15);
@@ -653,6 +665,11 @@ function showTodayRoute(){
   map.fitBounds(mapLine.getBounds(),{padding:[18,18]});
   setTimeout(()=>map.invalidateSize(),80);
   drawProfile("#todayProf", r);
+  if(r.shape){
+    shapeMode = r.shape === "往復" ? "outback" : "loop";
+    $("#shapeChips").querySelectorAll(".chip").forEach(x=>
+      x.classList.toggle("on", x.dataset.shape === shapeMode));
+  }
   const DIRS = ["北","北東","東","南東","南","南西","西","北西"];
   $("#dirChips").innerHTML = DIRS.map(d=>
     `<button class="chip${r.dir===d?" on":""}" data-dir="${d}">${d}</button>`).join("");
@@ -691,16 +708,17 @@ function download(name, text, mime){
 function recentDirs(){
   return DB.records.filter(r=>r.dir).slice(-3).map(r=>r.dir);
 }
+let shapeMode = "loop";
 async function freshRoute(km, dir){
-  const p = {km, n:8};
+  const p = {km, n:8, shape:shapeMode};
   if(dir) p.dir = dir;
   const av = recentDirs();
   if(av.length) p.avoid = av.join(",");
   const r = await callFn("route", p);
-  return {id:uid(), name:`${km}km ${r.dir}回り`,
+  return {id:uid(), name:`${km}km ${r.dir}へ${r.shape}`,
           target:r.target, km:r.km, ascent:r.ascent, descent:r.descent,
-          bearing:r.bearing, dir:r.dir, coords:r.coords,
-          created:iso(new Date()), used:0, errPct:r.errPct};
+          bearing:r.bearing, dir:r.dir, shape:r.shape, turnKm:r.turnKm,
+          coords:r.coords, created:iso(new Date()), used:0, errPct:r.errPct};
 }
 async function generate(){
   const km = Number($("#genKm").value), n = Number($("#genN").value);
@@ -708,9 +726,10 @@ async function generate(){
   const line = (t,c)=>{ log.insertAdjacentHTML("beforeend",`<div class="${c||""}">${t}</div>`); log.scrollTop=log.scrollHeight; };
   $("#genBtn").disabled = true; $("#genBtn").textContent = "生成中…";
   try{
-    const r = await callFn("route", {km, n});
+    const r = await callFn("route", {km, n, shape:shapeMode});
     DB.routes.push({id:uid(), name:`${km}km-${String(DB.routes.length+1).padStart(2,"0")}`,
       target:r.target, km:r.km, ascent:r.ascent, descent:r.descent,
+      bearing:r.bearing, dir:r.dir, shape:r.shape,
       coords:r.coords, created:iso(new Date()), used:0});
     line(`${r.km.toFixed(2)}km（誤差 ${r.errPct}%）を台帳に追加。${r.tried}本試して ${r.kept}本が合格。`, "ok");
     line("設定タブの保存するを押すと残ります。");
@@ -1085,6 +1104,12 @@ $("#syncBtn").onclick = ()=>sync("save");
 $("#gpxBtn").onclick = ()=>todayRoute && download(`${todayRoute.name}.gpx`, gpx(todayRoute),"application/gpx+xml");
 $("#shuffleBtn").onclick = ()=>{ if(todayRoute) pickRoute(todayRoute.target, todayRoute.id); };
 $("#libBtn").onclick = ()=>{ if(todayRoute) pickFromLibrary(todayRoute.target, todayRoute.id); };
+$("#shapeChips").onclick = e=>{
+  const b = e.target.closest(".chip"); if(!b || !todayRoute) return;
+  shapeMode = b.dataset.shape;
+  $("#shapeChips").querySelectorAll(".chip").forEach(x=>x.classList.toggle("on",x===b));
+  pickRoute(todayRoute.target, todayRoute.id, todayRoute.dir);
+};
 $("#dirChips").onclick = e=>{
   const b = e.target.closest(".chip"); if(!b || !todayRoute) return;
   pickRoute(todayRoute.target, todayRoute.id, b.dataset.dir);
