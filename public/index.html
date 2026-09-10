@@ -635,10 +635,16 @@ async function pickRoute(km, avoidId, dir){
 function pickFromLibrary(km, avoidId, why){
   const pool = DB.routes.filter(r=>Math.abs(r.km-km)<0.75 && r.id!==avoidId);
   const src = pool.length?pool:DB.routes.filter(r=>r.id!==avoidId);
+  if(!src.length && !why) why = "台帳が空です。ルートタブで作っておくと、生成に失敗した日の控えになります。";
   if(!src.length){
     todayRoute=null;
-    $("#todayMeta").innerHTML = `<span class="err">ルートを用意できません${why?`（${why}）`:""}</span>`;
-    drawProfile("#todayProf",null); return;
+    $("#todayMeta").innerHTML =
+      `<span class="err">${why||"ルートを用意できません"}</span>`
+      + `<span><button class="chip sm" id="retryBtn">もう一度作る</button></span>`;
+    $("#retryBtn").onclick = ()=>pickRoute(targetKm(), null, null);
+    drawProfile("#todayProf",null);
+    renderRouteControls(null);
+    return;
   }
   src.sort((a,b)=>(a.used||0)-(b.used||0));
   todayRoute = src[0];
@@ -665,14 +671,20 @@ function showTodayRoute(){
   map.fitBounds(mapLine.getBounds(),{padding:[18,18]});
   setTimeout(()=>map.invalidateSize(),80);
   drawProfile("#todayProf", r);
-  if(r.shape){
-    shapeMode = r.shape === "往復" ? "outback" : "loop";
-    $("#shapeChips").querySelectorAll(".chip").forEach(x=>
-      x.classList.toggle("on", x.dataset.shape === shapeMode));
-  }
+  if(r.shape) shapeMode = r.shape === "往復" ? "outback" : "loop";
+  renderRouteControls(r.dir);
+}
+/* ルートが作れたかどうかに関わらず、形状と方角は常に選べる状態にしておく */
+function renderRouteControls(activeDir){
+  $("#shapeChips").querySelectorAll(".chip").forEach(x=>
+    x.classList.toggle("on", x.dataset.shape === shapeMode));
   const DIRS = ["北","北東","東","南東","南","南西","西","北西"];
   $("#dirChips").innerHTML = DIRS.map(d=>
-    `<button class="chip${r.dir===d?" on":""}" data-dir="${d}">${d}</button>`).join("");
+    `<button class="chip${activeDir===d?" on":""}" data-dir="${d}">${d}</button>`).join("");
+}
+/* 今日の目標距離。ルートが無くても指示から拾える */
+function targetKm(){
+  return (todayRoute && todayRoute.target) || (brief && Number(brief.km)) || 5;
 }
 function drawProfile(sel, r){
   const svg = $(sel);
@@ -781,7 +793,15 @@ async function callFn(name, params, body){
   const res = await fetch(`${fnBase()}/${name}?${q}`, body ? {
     method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
   } : undefined);
-  const j = await res.json().catch(()=>({error:"レスポンスを解釈できません"}));
+  const text = await res.text();
+  let j = null;
+  try{ j = JSON.parse(text); }catch(e){
+    // JSONでない＝関数のタイムアウトやクラッシュ。中身の頭を見せる
+    const head = text.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,80);
+    throw new Error(res.status===502||res.status===504
+      ? `${name} が時間内に終わりませんでした（${res.status}）`
+      : `${name} ${res.status}: ${head||"空のレスポンス"}`);
+  }
   if(!res.ok) throw new Error(j.error||`${name} ${res.status}`);
   return j;
 }
@@ -1102,17 +1122,17 @@ $("#recList").onclick = e=>{
 $("#loadBtn").onclick = ()=>sync("load");
 $("#syncBtn").onclick = ()=>sync("save");
 $("#gpxBtn").onclick = ()=>todayRoute && download(`${todayRoute.name}.gpx`, gpx(todayRoute),"application/gpx+xml");
-$("#shuffleBtn").onclick = ()=>{ if(todayRoute) pickRoute(todayRoute.target, todayRoute.id); };
-$("#libBtn").onclick = ()=>{ if(todayRoute) pickFromLibrary(todayRoute.target, todayRoute.id); };
+$("#shuffleBtn").onclick = ()=>pickRoute(targetKm(), todayRoute && todayRoute.id, todayRoute && todayRoute.dir);
+$("#libBtn").onclick = ()=>pickFromLibrary(targetKm(), todayRoute && todayRoute.id);
 $("#shapeChips").onclick = e=>{
-  const b = e.target.closest(".chip"); if(!b || !todayRoute) return;
+  const b = e.target.closest(".chip"); if(!b) return;
   shapeMode = b.dataset.shape;
   $("#shapeChips").querySelectorAll(".chip").forEach(x=>x.classList.toggle("on",x===b));
-  pickRoute(todayRoute.target, todayRoute.id, todayRoute.dir);
+  pickRoute(targetKm(), todayRoute && todayRoute.id, todayRoute && todayRoute.dir);
 };
 $("#dirChips").onclick = e=>{
-  const b = e.target.closest(".chip"); if(!b || !todayRoute) return;
-  pickRoute(todayRoute.target, todayRoute.id, b.dataset.dir);
+  const b = e.target.closest(".chip"); if(!b) return;
+  pickRoute(targetKm(), todayRoute && todayRoute.id, b.dataset.dir);
 };
 $("#keepBtn").onclick = ()=>{
   if(!todayRoute) return;
