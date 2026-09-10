@@ -346,13 +346,11 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
         <div class="field"><label for="token">合言葉</label>
           <input type="password" id="token" placeholder="端末ごとに1回だけ"></div>
       </div>
-      <div class="field"><label for="fnBase">Netlify Functions のベースURL</label>
-        <input type="text" id="fnBase" placeholder="/.netlify/functions" value="/.netlify/functions"></div>
       <div class="grid">
         <button class="ghost" id="loadBtn">読み込む</button>
         <button class="ghost" id="syncBtn">保存する</button>
       </div>
-      <div class="msg" id="syncMsg">APIキーと保存先はサーバー側にあります。新しい端末で開いたときは合言葉だけ入れてください。</div>
+      <div class="msg" id="syncMsg">記録・ルート・今日の指示・会話はすべてサーバー側に保存され、どの端末でも同じ内容が出ます。端末に残るのは合言葉だけです。変更は自動保存されます。</div>
     </div>
   </section>
 </div>
@@ -424,37 +422,30 @@ async function loadWeather(){
 let brief = null;
 
 /* 指示は1日1回だけ組む。同じ日に開き直しても、その朝の内容とルートが
-   そのまま出るようにキャッシュする。要望を出したときだけ組み直す。 */
-const dayKey = () => "asaran:day:" + iso(new Date());
-function saveDay(){
-  try{ localStorage.setItem(dayKey(), JSON.stringify({brief, route:todayRoute, chat})); }catch(e){}
+   そのまま出るようにする。保存先は npoint なので、別の端末で開いても
+   同じ指示・同じルート・同じ会話の続きが出る。 */
+function today(){
+  const d = iso(new Date());
+  if(!DB.today || DB.today.date !== d) DB.today = {date:d, brief:null, route:null, chat:[]};
+  return DB.today;
 }
-function loadDay(){
-  try{
-    const s = localStorage.getItem(dayKey());
-    return s ? JSON.parse(s) : null;
-  }catch(e){ return null; }
-}
-function purgeOldDays(){
-  try{
-    const keep = dayKey();
-    for(let i=localStorage.length-1; i>=0; i--){
-      const k = localStorage.key(i);
-      if(k && k.startsWith("asaran:day:") && k !== keep) localStorage.removeItem(k);
-    }
-  }catch(e){}
-}
-/* 起動時の入口。キャッシュがあればAPIを呼ばずにそれを出す。 */
+/* 起動時の入口。その日の指示が保存されていればAPIを呼ばない。 */
 function startBrief(){
-  const c = loadDay();
-  if(c && c.brief){
-    brief = c.brief;
-    todayRoute = c.route || null;
-    chat = c.chat || [];
+  const t = today();
+  if(t.brief){
+    brief = t.brief;
+    todayRoute = t.route || null;
+    chat = t.chat || [];
     renderBrief(true); renderChat();
     return;
   }
+  chat = t.chat || [];
   buildBrief();
+}
+function saveDay(){
+  const t = today();
+  t.brief = brief; t.route = todayRoute; t.chat = chat;
+  save();
 }
 
 function briefContext(){
@@ -763,8 +754,7 @@ async function generate(){
       bearing:r.bearing, dir:r.dir, shape:r.shape,
       coords:r.coords, created:iso(new Date()), used:0});
     line(`${r.km.toFixed(2)}km（誤差 ${r.errPct}%）を台帳に追加。${r.tried}本試して ${r.kept}本が合格。`, "ok");
-    line("設定タブの保存するを押すと残ります。");
-    renderRoutes();
+    renderRoutes(); save();
   }catch(e){ line("失敗: "+e.message, "no"); }
   $("#genBtn").disabled = false; $("#genBtn").textContent = "生成して台帳に入れる";
 }
@@ -805,11 +795,11 @@ function showSelRoute(){
 }
 
 /* ---------------- 連携（Netlify Functions 経由） ---------------- */
-const fnBase = () => ($("#fnBase").value||"/.netlify/functions").replace(/\/$/,"");
+const FN = "/.netlify/functions";
 
 async function callFn(name, params, body){
   const q = new URLSearchParams({...(params||{}), t:$("#token").value.trim()}).toString();
-  const res = await fetch(`${fnBase()}/${name}?${q}`, body ? {
+  const res = await fetch(`${FN}/${name}?${q}`, body ? {
     method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
   } : undefined);
   const text = await res.text();
@@ -1082,7 +1072,7 @@ function editRecord(date){
   $("#f-date").scrollIntoView({behavior:"smooth", block:"center"});
 }
 function afterEdit(msg){
-  renderRecords(); renderCharts(); renderDiet();
+  renderRecords(); renderCharts(); renderDiet(); renderTally(); save();
   toast($("#saveMsg"), msg + " 設定タブの保存するを押すと確定します。");
 }
 
@@ -1177,6 +1167,12 @@ function renderCharts(){
 }
 
 /* ---------------- 保存 ---------------- */
+/* 変更のたびに npoint へ書き戻す。押し忘れると別の端末に反映されないため。 */
+let saveTimer = null, saving = false;
+function save(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(()=>sync("save", true), 1200);
+}
 function saveRecord(){
   const num = id => { const v=$(id).value; return v===""?undefined:Number(v); };
   const rec = {date:$("#f-date").value, type:$("#f-type").value,
@@ -1195,24 +1191,31 @@ function saveRecord(){
   }
   renderCharts(); renderRecords(); renderDiet(); renderTally();
   toast($("#saveMsg"), i>=0?"同じ日付の記録を上書きしました。設定タブの保存するを押してください。":"追加しました。設定タブの保存するを押してください。");
+  save();
   commentOnRecord(rec);
 }
-async function sync(dir){
+async function sync(dir, quiet){
   const m = $("#syncMsg");
-  if(!$("#token").value.trim()){ toast(m,"合言葉を入れてください",true); return; }
+  if(!$("#token").value.trim()){ if(!quiet) toast(m,"合言葉を入れてください",true); return; }
   try{
     if(dir==="load"){
       const j = await callFn("data");
-      DB = {records:j.records||[], routes:j.routes||[], settings:j.settings||{}};
+      DB = {records:j.records||[], routes:j.routes||[],
+            settings:j.settings||{}, today:j.today||null};
       if(DB.settings.goalW) $("#goalW").value = DB.settings.goalW;
-      renderCharts(); renderRecords(); renderRoutes(); renderTally(); renderChat(); startBrief();
+      renderCharts(); renderRecords(); renderRoutes(); renderTally(); startBrief();
       toast(m,`読み込みました（記録 ${DB.records.length}件・ルート ${DB.routes.length}本）。`);
     }else{
+      if(saving){ save(); return; }              // 書き込み中なら少し待って再試行
+      saving = true;
       DB.settings = Object.assign({}, DB.settings, {goalW:Number($("#goalW").value)});
       const j = await callFn("data", null, DB);
-      toast(m,`保存しました（記録 ${j.records}件・ルート ${j.routes}本）。`);
+      saving = false;
+      toast(m, quiet
+        ? `自動保存 ${new Date().toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}`
+        : `保存しました（記録 ${j.records}件・ルート ${j.routes}本）。`);
     }
-  }catch(e){ toast(m,"通信に失敗しました: "+e.message,true); }
+  }catch(e){ saving = false; toast(m,"通信に失敗しました: "+e.message,true); }
 }
 function toCSV(){
   const cols = ["date","type","w","bmi","fat","mus","ms","vis","bone","bmr","age","dist","time","pace","kcal","elev","pitch","hard","memo"];
@@ -1247,7 +1250,7 @@ $("#sendBtn").onclick = ()=>{
 $("#request").addEventListener("keydown", e=>{ if(e.key==="Enter") $("#sendBtn").click(); });
 $("#pullBtn").onclick = ()=>pull(1);
 $("#backfillBtn").onclick = ()=>pull(30);
-$("#goalW").oninput = renderDiet;
+$("#goalW").oninput = ()=>{ renderDiet(); save(); };
 $("#genBtn").onclick = generate;
 $("#saveBtn").onclick = saveRecord;
 $("#csvBtn").onclick = toCSV;
@@ -1276,12 +1279,13 @@ $("#dirChips").onclick = e=>{
 $("#keepBtn").onclick = ()=>{
   if(!todayRoute) return;
   if(!DB.routes.some(r=>r.id===todayRoute.id)) DB.routes.push(todayRoute);
-  renderRoutes();
+  renderRoutes(); save();
   $("#todayMeta").insertAdjacentHTML("beforeend","<span>台帳に入れました</span>");
 };
 
-/* 設定は端末に覚えさせる（自分のiPhoneでしか開かない前提） */
-const REMEMBER = ["token","fnBase","goalW"];
+/* 端末に残すのは合言葉だけ。これはサーバーを開く鍵そのものなので、
+   共有すると誰でも開けてしまう。それ以外は全部npoint側に置く。 */
+const REMEMBER = ["token"];
 function loadSettings(){
   try{ for(const id of REMEMBER){
     const v = localStorage.getItem("asaran:"+id);
@@ -1291,12 +1295,14 @@ function loadSettings(){
 function saveSettings(){
   try{ for(const id of REMEMBER) localStorage.setItem("asaran:"+id, $("#"+id).value); }catch(e){}
 }
-REMEMBER.forEach(id=>$("#"+id).addEventListener("change", saveSettings));
+REMEMBER.forEach(id=>$("#"+id).addEventListener("change", ()=>{
+  saveSettings();
+  if(id==="token" && $("#token").value.trim()) sync("load");
+}));
 
 const now = new Date();
 $("#today").textContent = now.toLocaleDateString("ja-JP",{month:"long",day:"numeric",weekday:"short"});
 $("#f-date").value = iso(now);
-purgeOldDays();
 loadSettings();
 renderCharts(); renderRecords(); renderRoutes(); renderTally(); renderChat();
 if($("#token").value) sync("load").then(loadWeather); else loadWeather();

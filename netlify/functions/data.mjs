@@ -30,7 +30,8 @@ export default async (req) => {
       const j = await r.json();
       return ok({records: Array.isArray(j.records) ? j.records : [],
                  routes:  Array.isArray(j.routes)  ? j.routes  : [],
-                 settings: j.settings || {}});
+                 settings: j.settings || {},
+                 today: j.today || null});
     }
     if(req.method === "POST"){
       const body = await req.json();
