@@ -449,6 +449,10 @@ function doneBrief(done){
   renderBrief();
 }
 
+/* 朝6時にNetlifyの定期実行が決めている前提。
+   それより早く開いたときは、まだ決めずに待つ（5時の天気で判断しても意味がない）。 */
+function tooEarly(){ return new Date().getHours() < 5; }
+
 let briefBusy = false;
 function startBrief(){
   if(briefBusy) return;                 // 生成中に呼ばれても重ねない
@@ -463,6 +467,15 @@ function startBrief(){
   }
   const done = todayRecord();
   if(done){ doneBrief(done); return; }  // 走り終わっていればAIは不要
+  if(tooEarly()){
+    $("#verdict").textContent = "6時に決まります";
+    $("#verdict").className = "v";
+    $("#headline").textContent = "";
+    $("#outdoor").style.display = "none";
+    $("#indoor").style.display = "none";
+    $("#routeCard").style.display = "none";
+    return;
+  }
   buildBrief();
 }
 function saveDay(){
@@ -481,103 +494,22 @@ function daysAgo(date){
 function labelOf(n){
   return n===0 ? "今日" : n===1 ? "昨日" : n===2 ? "一昨日" : `${n}日前`;
 }
-function briefContext(){
-  const recent = DB.records.slice(-21).map(r=>({
-    日付:r.date, いつ:labelOf(daysAgo(r.date)), 内容:r.type, 体重:r.w, 体脂肪率:r.fat, 筋肉量:r.mus,
-    距離:r.dist, 時間:r.time, ペース:r.pace, 高低差:r.elev, ピッチ:r.pitch,
-    きつさ:r.hard, メモ:r.memo, 走った方角:r.dir
-  }));
-  const routes = [...new Set(DB.routes.map(r=>r.target))].sort((a,b)=>a-b);
-  const said = chat.filter(m=>m.role==="user").map(m=>m.content);
-  const done = todayRecord();
-  return {
-    今日: iso(new Date()),
-    今日すでに実施した内容: done ? {
-      内容:done.type, 距離:done.dist, 時間:done.time, ペース:done.pace,
-      きつさ:done.hard, メモ:done.memo
-    } : "まだ何もしていない",
-    今朝のやりとり: said.length ? said : "なし",
-    積み上げ: tallies(),
-    目標体重: (DB.settings && DB.settings.goalW) || 60,
-    現在の天気: wxData ? {
-      気温:wxData.temp, 体感:wxData.feels, 天気:WX[wxData.code]||"不明",
-      降水mm:wxData.prec, 風速:wxData.wind, 雷:[95,96,99].includes(wxData.code)
-    } : "取得できず",
-    用意できているルートの距離: routes.length?routes:"なし",
-    直近の記録: recent
-  };
-}
-
-const BRIEF_PROMPT = `あなたは名古屋市緑区に住む20代男性のランニングコーチ兼トレーナーです。
-彼は毎朝、滝ノ水中央公園を起終点に走るか、天候が悪ければ室内で自重トレをします。
-目的は減量で、目標体重に向けて脂肪を落としつつ筋肉は保ちたい。
-
-「今日すでに実施した内容」に記録がある場合、彼はもう今日の運動を終えています。
-その場合は新しいメニューを出さず、mode はやった内容をそのまま入れ、km も実際に
-走った距離を入れて、reason ではその日の走りを踏まえた言葉をかけてください。
-stretchPost を充実させ、stretchPre は空配列にしてください。
-彼が「もう一本行きたい」と言っている場合だけ、追加のメニューを出します。
-
-以下のデータを読んで、今日やるべきことを決めてください。
-機械的な計算式ではなく、記録の流れ・きつさの言葉・天気・目標への進み具合を
-総合的に見て、今日の彼にとって一番いい判断をしてください。
-数字を少し変えるだけの無難な提案より、必要なら強度を大きく落とす、必要なら上げる、といった判断をしてください。
-
-彼は毎日必ず何かをやります。完全な休養日は作りません。
-疲労が強い日や故障が心配な日は "回復" を選び、散歩・軽い体操・
-ストレッチ中心の、負荷はほぼゼロだが体は動かす内容にしてください。
-「今日は休んでください」で終わらせず、必ず具体的なメニューを出すこと。
-
-出力は次のJSONのみ。前置き・説明・コードフェンスは不要です。
-
-{
- "mode": "外ラン" | "室内トレ" | "回復",
- "km": 数値またはnull,
- "direction": "北"|"北東"|"東"|"南東"|"南"|"南西"|"西"|"北西"|null,
- "shape": "周回"|"往復"|null,
- "headline": "今朝の一言。15文字以内",
- "reason": "その判断の理由。彼に語りかける調子で2〜3文",
- "stretchPre": [["種目名","回数や秒数"], ...],
- "stretchPost": [["種目名","回数や秒数"], ...],
- "indoor": [["種目名","回数×セット"], ...],
- "note": "今日気をつけること、または減量の進み具合について1〜2文"
-}
-
-規則:
-- modeが外ランならkmを入れ、indoorは空配列にする。
-- modeが室内トレまたは回復ならkmはnull、indoorを埋める。
-- 「今朝のやりとり」に彼の言葉があれば最優先で反映する。時間がない・坂を走りたい・
-  膝が痛い・気分が乗らない・遠くまで行きたい等、内容に応じて距離も方角も
-  メニューも変える。要望に応えた結果を reason で説明すること。
-  ただし痛みや不調の訴えには無理をさせない方向で応じる。
-- shapeはコースの形。道が入り組んでいて迷いたくない日、ペースを一定に保ちたい日、
-  途中で切り上げるかもしれない日は "往復" が向く。景色を変えたい日は "周回"。
-  こだわりがなければ null。
-- directionは今朝どちら方面へ走るか。直近数日の「走った方角」を見て、
-  同じ方面が続かないように変える。特に理由がなければ直近3日と違う方角にする。
-  景色を変えたい、向かい風を避けたい、坂を避けたいといった理由があればそれに従う。
-  こだわりがなければ null にすると自動で直近から一番離れた方角が選ばれる。
-- stretchPreは動的ストレッチのみ。走る直前の静的ストレッチは筋出力を下げるので入れない。
-- stretchPostは静的ストレッチ。前回のきつさや筋肉痛の記述に応じて内容を変える。
-- 回復の日のindoorは、散歩20分・ラジオ体操・可動域ドリルのような軽いもので埋める。
-- 体重の増減だけでなく、体脂肪率と筋肉量の動きを見て判断する。`;
-
 async function buildBrief(){
   if(!$("#token").value.trim()){
-    fallbackBrief("合言葉が未設定です。設定タブで入れると、その日の記録に合わせた指示が出ます。"); return;
+    fallbackBrief("合言葉が未設定です。設定タブで入れてください。"); return;
   }
   briefBusy = true;
   $("#verdict").textContent = "判断中…";
   $("#reqBtn").disabled = true;
   try{
-    const j = await callFn("ai", null, {model:"claude-sonnet-4-6", max_tokens:1500,
-      messages:[{role:"user", content: BRIEF_PROMPT + "\n\n" +
-        JSON.stringify(briefContext(), null, 1)}]});
-    const txt = j.content.filter(b=>b.type==="text").map(b=>b.text).join("")
-                 .replace(/```json|```/g,"").trim();
-    brief = JSON.parse(txt);
-    todayRoute = null;
-    renderBrief();
+    // 判断は morning 関数に集約してある。ここは呼ぶだけ。
+    const j = await callFn("morning", {force:1});
+    brief = j.brief;
+    todayRoute = j.route || null;
+    today().brief = brief; today().route = todayRoute;
+    renderBrief(true);
+    if(brief.mode === "外ラン" && brief.km && !todayRoute)
+      pickRoute(Number(brief.km), null, brief.direction);
   }catch(e){ fallbackBrief("指示を組み立てられませんでした（"+e.message+"）。"); }
   briefBusy = false;
   $("#reqBtn").disabled = false;
