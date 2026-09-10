@@ -3,6 +3,7 @@
 ```
 public/index.html                    画面
 netlify/functions/healthplanet.mjs   体組成をタニタから取ってくる
+netlify/functions/route.mjs          周回ルートを作る
 netlify.toml
 ```
 
@@ -55,6 +56,21 @@ Nike Run Club で走り終わったら、結果画面のスクリーンショッ
 体組成のボタンと合わせて、朝の操作は「体組成を取り込む → スクショを読む →
 きつさを選ぶ → 保存」の4アクションです。
 
+## 3.5. OpenRouteService
+
+https://openrouteservice.org/ の Sign up から HeiGIT アカウントを作ります。
+作った時点で無料の Standard キーが付いてくるので、申請や審査はありません。
+account.heigit.org のダッシュボードに表示されるキー（`eyJ` で始まる長い文字列）を
+Netlify の環境変数 `ORS_API_KEY` に入れて再デプロイ。
+
+毎朝、その日の目標距離に合わせて周回ルートがその場で作られます。
+8本まとめて生成し、実距離が目標±3%に収まったものだけを残したうえで、
+方角で1本を選びます。誤差3%以内が1本も出なければ台帳から選びます。
+
+方角は、返ってきた線の重心が起点から見てどちらにあるかを実際に計算して決めます。
+ORSのseedはどっちを向くか事前に分からないので、測ってから選ぶ形です。
+直近3回に走った方角は記録に残るので、そこから一番離れた方角が優先されます。
+
 ## 4. サイト側の設定
 
 設定タブで入れるもの（端末に保存されるので初回だけ）:
@@ -64,7 +80,7 @@ Nike Run Club で走り終わったら、結果画面のスクリーンショッ
 - Netlify Functions のベースURL — 既定の `/.netlify/functions` のままでOK
 - npoint.io の URL — 手順1のもの
 
-OpenRouteService のキーはルート生成のときだけ都度入力します。
+OpenRouteService のキーはサーバー側に置くので、サイトには入力しません。
 
 ## 環境変数まとめ
 
@@ -72,6 +88,7 @@ OpenRouteService のキーはルート生成のときだけ都度入力します
 | --- | --- |
 | `HP_CLIENT_ID` / `HP_CLIENT_SECRET` | Health Planet アプリ |
 | `HP_REFRESH_TOKEN` | Health Planet 認可済みトークン |
+| `ORS_API_KEY` | OpenRouteService（account.heigit.org で発行） |
 
 環境変数を追加・変更したら、そのつど再デプロイしないと反映されません。
 

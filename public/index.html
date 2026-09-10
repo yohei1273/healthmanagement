@@ -93,7 +93,7 @@ legend{font-size:12px;color:var(--sub);padding-bottom:6px}
 /* charts */
 .chart{margin-bottom:18px}
 .chart h3{font-size:12.5px;font-weight:500;color:var(--sub);margin-bottom:4px}
-.chart svg{display:block;width:100%;height:112px;overflow:visible}
+.chart svg{display:block;width:100%;height:auto}
 .lgd{display:flex;gap:12px;font-size:11.5px;color:var(--sub);margin-top:2px}
 .lgd i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:4px}
 
@@ -164,7 +164,13 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
       <div class="rmeta" id="todayMeta"></div>
       <div class="grid" style="margin-top:12px">
         <button class="ghost" id="gpxBtn">GPXを保存</button>
-        <button class="ghost" id="shuffleBtn">別のルートに変える</button>
+        <button class="ghost" id="shuffleBtn">別のルートを作る</button>
+      </div>
+      <div class="grid" style="margin-top:10px">
+        <button class="ghost" id="keepBtn">台帳に残す</button>
+        <button class="ghost" id="libBtn">台帳から選ぶ</button>
+      </div>
+      <div class="chips" id="dirChips" style="margin-top:10px"></div>
       </div>
     </div>
 
@@ -276,17 +282,15 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
     </div>
 
     <div class="card">
-      <h2>ルートを増やす</h2>
-      <p class="msg">滝ノ水中央公園を起終点に周回コースを生成し、実際の道なり距離が目標±3%に収まったものだけを台帳に入れます。</p>
-      <div class="field"><label for="orsKey">OpenRouteService APIキー</label>
-        <input type="password" id="orsKey" placeholder="毎回入力（サイトには保存しません）"></div>
+      <h2>ルートを台帳に足す</h2>
+      <p class="msg">気に入ったコースを残しておきたいとき用です。毎朝のルートは自動で新しく作られるので、普段はここを触る必要はありません。</p>
       <div class="grid">
-        <div class="field"><label for="genKm">目標距離 km</label>
+        <div class="field"><label for="genKm">距離 km</label>
           <select id="genKm"><option>3</option><option>4</option><option selected>5</option><option>6</option><option>7</option></select></div>
         <div class="field"><label for="genN">試す本数</label>
-          <select id="genN"><option>5</option><option selected>10</option><option>20</option></select></div>
+          <select id="genN"><option>3</option><option selected>6</option><option>10</option></select></div>
       </div>
-      <button id="genBtn">生成する</button>
+      <button id="genBtn">生成して台帳に入れる</button>
       <div class="log" id="genLog"></div>
     </div>
 
@@ -322,6 +326,7 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
 /* ---------------- 設定 ---------------- */
 const START = [35.0839, 136.9736];      // 滝ノ水中央公園
 const NPOINT_URL = "";                   // ここに固定してもOK
+const ORS_URL = "https://api.heigit.org/openrouteservice/v2/directions/foot-walking/geojson";
 const TILE = "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
 const TILE_ATTR = '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>';
 
@@ -376,7 +381,7 @@ function briefContext(){
   const recent = DB.records.slice(-21).map(r=>({
     日付:r.date, 内容:r.type, 体重:r.w, 体脂肪率:r.fat, 筋肉量:r.mus,
     距離:r.dist, 時間:r.time, ペース:r.pace, 高低差:r.elev, ピッチ:r.pitch,
-    きつさ:r.hard, メモ:r.memo
+    きつさ:r.hard, メモ:r.memo, 走った方角:r.dir
   }));
   const routes = [...new Set(DB.routes.map(r=>r.target))].sort((a,b)=>a-b);
   return {
@@ -406,6 +411,7 @@ const BRIEF_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
 {
  "mode": "外ラン" | "室内トレ" | "休養",
  "km": 数値またはnull,
+ "direction": "北"|"北東"|"東"|"南東"|"南"|"南西"|"西"|"北西"|null,
  "headline": "今朝の一言。15文字以内",
  "reason": "その判断の理由。彼に語りかける調子で2〜3文",
  "stretchPre": [["種目名","回数や秒数"], ...],
@@ -417,7 +423,10 @@ const BRIEF_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
 規則:
 - modeが外ランならkmを入れ、indoorは空配列にする。
 - modeが室内トレまたは休養ならkmはnull、indoorを埋める。
-- 用意できているルートの距離が示されている場合、kmはその中から選ぶ。
+- directionは今朝どちら方面へ走るか。直近数日の「走った方角」を見て、
+  同じ方面が続かないように変える。特に理由がなければ直近3日と違う方角にする。
+  景色を変えたい、向かい風を避けたい、坂を避けたいといった理由があればそれに従う。
+  こだわりがなければ null にすると自動で直近から一番離れた方角が選ばれる。
 - stretchPreは動的ストレッチのみ。走る直前の静的ストレッチは筋出力を下げるので入れない。
 - stretchPostは静的ストレッチ。前回のきつさや筋肉痛の記述に応じて内容を変える。
 - 休養の日もstretchPreは軽い内容にして、stretchPostは省いてよい。
@@ -475,7 +484,7 @@ function renderBrief(){
     $("#targetKm").textContent = Number(brief.km).toFixed(1);
     $("#why").textContent = brief.reason || "";
     $("#warnBox").innerHTML = brief.note ? `<div class="warn">${brief.note}</div>` : "";
-    pickRoute(Number(brief.km));
+    pickRoute(Number(brief.km), null, brief.direction);
   }else{
     $("#outdoor").style.display="none"; $("#indoor").style.display="block";
     $("#routeCard").style.display="none";
@@ -536,17 +545,28 @@ function lastRun(){ return [...DB.records].reverse().find(r=>r.type==="外ラン
 function decide(){ buildBrief(); }
 
 /* ---------------- ルート選択 ---------------- */
-function pickRoute(km, avoidId){
+/* 毎朝その場で新しい周回を作る。作れなければ台帳から選ぶ。 */
+async function pickRoute(km, avoidId, dir){
+  $("#todayMeta").innerHTML = `<span>ルートを作成中…</span>`;
+  try{
+    todayRoute = await freshRoute(km, dir);
+    showTodayRoute();
+    return;
+  }catch(e){ pickFromLibrary(km, avoidId, e.message); }
+}
+function pickFromLibrary(km, avoidId, why){
   const pool = DB.routes.filter(r=>Math.abs(r.km-km)<0.75 && r.id!==avoidId);
   const src = pool.length?pool:DB.routes.filter(r=>r.id!==avoidId);
   if(!src.length){
     todayRoute=null;
-    $("#todayMeta").innerHTML = `<span>台帳が空です。ルートタブで生成してください。</span>`;
+    $("#todayMeta").innerHTML = `<span class="err">ルートを用意できません${why?`（${why}）`:""}</span>`;
     drawProfile("#todayProf",null); return;
   }
   src.sort((a,b)=>(a.used||0)-(b.used||0));
   todayRoute = src[0];
   showTodayRoute();
+  if(why) $("#todayMeta").insertAdjacentHTML("beforeend",
+    `<span class="err">新規生成に失敗したので台帳から選びました（${why}）</span>`);
 }
 function showTodayRoute(){
   if(!todayRoute) return;
@@ -554,7 +574,8 @@ function showTodayRoute(){
   $("#todayMeta").innerHTML =
     `<span>実距離 <b>${r.km.toFixed(2)}</b> km</span>
      <span>登り <b>${Math.round(r.ascent)}</b> m</span>
-     <span>目標 ${r.target} km</span>`;
+     ${r.dir?`<span>方角 <b>${r.dir}</b></span>`:""}
+     <span>目標 ${r.target} km${r.errPct!=null?`（誤差 ${r.errPct}%）`:""}</span>`;
   if(!map){
     map = L.map("map",{zoomControl:false,attributionControl:true}).setView(START,15);
     L.tileLayer(TILE,{attribution:TILE_ATTR,maxZoom:18}).addTo(map);
@@ -565,6 +586,9 @@ function showTodayRoute(){
   map.fitBounds(mapLine.getBounds(),{padding:[18,18]});
   setTimeout(()=>map.invalidateSize(),80);
   drawProfile("#todayProf", r);
+  const DIRS = ["北","北東","東","南東","南","南西","西","北西"];
+  $("#dirChips").innerHTML = DIRS.map(d=>
+    `<button class="chip${r.dir===d?" on":""}" data-dir="${d}">${d}</button>`).join("");
 }
 function drawProfile(sel, r){
   const svg = $(sel);
@@ -595,57 +619,37 @@ function download(name, text, mime){
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
 
-/* ---------------- ORS 生成 ---------------- */
-async function orsRoundTrip(key, meters, seed){
-  const body = {coordinates:[[START[1],START[0]]], elevation:true, instructions:false,
-                options:{round_trip:{length:meters, points:5, seed:seed}}};
-  let res = await fetch("https://api.openrouteservice.org/v2/directions/foot-walking/geojson",{
-    method:"POST",
-    headers:{"Authorization":key,"Content-Type":"application/json","Accept":"application/geo+json"},
-    body: JSON.stringify(body)
-  });
-  if(res.status===400){ // 一部バージョンはハイフン表記
-    const alt = JSON.parse(JSON.stringify(body));
-    alt.options = {"round-trip":body.options.round_trip};
-    res = await fetch("https://api.openrouteservice.org/v2/directions/foot-walking/geojson",{
-      method:"POST",
-      headers:{"Authorization":key,"Content-Type":"application/json","Accept":"application/geo+json"},
-      body: JSON.stringify(alt)
-    });
-  }
-  if(!res.ok) throw new Error(`ORS ${res.status}`);
-  const j = await res.json();
-  const f = j.features[0], p = f.properties;
-  return {dist:p.summary.distance, ascent:p.ascent??0, descent:p.descent??0,
-          coords:f.geometry.coordinates};
+/* ---------------- ルート生成（関数経由・キーはサーバ側） ---------------- */
+/* 直近3回に走った方角。同じ方面が続かないように関数へ渡す。 */
+function recentDirs(){
+  return DB.records.filter(r=>r.dir).slice(-3).map(r=>r.dir);
+}
+async function freshRoute(km, dir){
+  const p = {km, n:8};
+  if(dir) p.dir = dir;
+  const av = recentDirs();
+  if(av.length) p.avoid = av.join(",");
+  const r = await callFn("route", p);
+  return {id:uid(), name:`${km}km ${r.dir}回り`,
+          target:r.target, km:r.km, ascent:r.ascent, descent:r.descent,
+          bearing:r.bearing, dir:r.dir, coords:r.coords,
+          created:iso(new Date()), used:0, errPct:r.errPct};
 }
 async function generate(){
-  const key = $("#orsKey").value.trim();
-  const target = Number($("#genKm").value), n = Number($("#genN").value);
+  const km = Number($("#genKm").value), n = Number($("#genN").value);
   const log = $("#genLog"); log.innerHTML = "";
   const line = (t,c)=>{ log.insertAdjacentHTML("beforeend",`<div class="${c||""}">${t}</div>`); log.scrollTop=log.scrollHeight; };
-  if(!key){ line("APIキーを入れてください","no"); return; }
   $("#genBtn").disabled = true; $("#genBtn").textContent = "生成中…";
-  let kept = 0;
-  for(let s=1; s<=n; s++){
-    try{
-      const r = await orsRoundTrip(key, target*1000, Date.now()%100000 + s*7);
-      const km = r.dist/1000, err = Math.abs(km-target)/target;
-      if(err<=0.03){
-        kept++;
-        DB.routes.push({id:uid(), name:`${target}km-${String(DB.routes.length+1).padStart(2,"0")}`,
-          target:target, km:km, ascent:r.ascent, descent:r.descent, coords:r.coords,
-          created:iso(new Date()), used:0});
-        line(`${s}/${n}  ${km.toFixed(2)}km  誤差${(err*100).toFixed(1)}%  → 採用`,"ok");
-      }else{
-        line(`${s}/${n}  ${km.toFixed(2)}km  誤差${(err*100).toFixed(1)}%  → 破棄`,"no");
-      }
-    }catch(e){ line(`${s}/${n}  失敗 (${e.message})`,"no"); }
-    await new Promise(r=>setTimeout(r,700));
-  }
-  $("#genBtn").disabled = false; $("#genBtn").textContent = "生成する";
-  line(`— ${kept}本を台帳に追加。保存するを押してください。`);
-  renderRoutes(); decide();
+  try{
+    const r = await callFn("route", {km, n});
+    DB.routes.push({id:uid(), name:`${km}km-${String(DB.routes.length+1).padStart(2,"0")}`,
+      target:r.target, km:r.km, ascent:r.ascent, descent:r.descent,
+      coords:r.coords, created:iso(new Date()), used:0});
+    line(`${r.km.toFixed(2)}km（誤差 ${r.errPct}%）を台帳に追加。${r.tried}本試して ${r.kept}本が合格。`, "ok");
+    line("設定タブの保存するを押すと残ります。");
+    renderRoutes();
+  }catch(e){ line("失敗: "+e.message, "no"); }
+  $("#genBtn").disabled = false; $("#genBtn").textContent = "生成して台帳に入れる";
 }
 
 /* ---------------- ルート一覧 ---------------- */
@@ -790,36 +794,65 @@ async function readShots(){
 }
 
 /* ---------------- グラフ ---------------- */
-/* 各系列はそれぞれの範囲でスケールする。体重とBMI、距離とペースのように
-   桁が違う値を重ねても、両方の変化が読めるようにするため。 */
-function lineChart(title, series){
-  const W=300,H=100,P=4;
+/* 系列ごとに別スケール。1本目は左軸、2本目は右軸に目盛りを出す。
+   体重63とBMI21のように桁が違っても両方の変化が読めるようにするため。 */
+function lineChart(title, series, labels){
+  const W=340, H=134, L=38, R=302, T=12, B=104;
   const n = Math.max(...series.map(s=>s.data.length));
   if(!n) return "";
-  const x = i => n<2 ? W/2 : P + i/(n-1)*(W-2*P);
-  let drawn = 0;
-  const parts = series.map(s=>{
+  const x = i => n<2 ? (L+R)/2 : L + i/(n-1)*(R-L);
+  const drawn = [];
+
+  series.forEach((s,si)=>{
     const vals = s.data.filter(v=>v!=null);
-    if(!vals.length) return {path:"", tag:""};
-    drawn++;
-    const mn=Math.min(...vals), mx=Math.max(...vals), rg=(mx-mn)||1;
-    const y = v => H-P - (v-mn)/rg*(H-2*P);
-    const pts = s.data.map((v,i)=>v==null?null:`${x(i).toFixed(1)},${y(v).toFixed(1)}`).filter(Boolean);
-    const dots = s.data.map((v,i)=>v==null?"":
-      `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.4" fill="${s.color}"/>`).join("");
+    if(!vals.length || si>1) return;
+    let mn=Math.min(...vals), mx=Math.max(...vals);
+    if(mx-mn < 1e-9){ mn-=1; mx+=1; }          // 全部同じ値のときも軸が潰れないように
+    const pad=(mx-mn)*0.12; mn-=pad; mx+=pad;
+    const y = v => B - (v-mn)/(mx-mn)*(B-T);
     const f = s.fmt || (v=>v.toFixed(1));
-    return {
-      path:`<polyline points="${pts.join(" ")}" fill="none" stroke="${s.color}" stroke-width="1.8"
-        vector-effect="non-scaling-stroke" stroke-linejoin="round"/>${dots}`,
-      tag:`<span><i style="background:${s.color}"></i>${s.name} ${f(mn)}–${f(mx)}</span>`
-    };
+    const ticks = [mn, (mn+mx)/2, mx];
+    drawn.push({s, si, y, f, ticks,
+      pts: s.data.map((v,i)=>v==null?null:[x(i), y(v)]).filter(Boolean)});
   });
-  if(!drawn) return "";
+  if(!drawn.length) return "";
+
+  // 目盛り線は1本目の系列に合わせて引く
+  const grid = drawn[0].ticks.map(t=>
+    `<line x1="${L}" y1="${drawn[0].y(t).toFixed(1)}" x2="${R}" y2="${drawn[0].y(t).toFixed(1)}"
+      stroke="#DDE3D6" stroke-width="1"/>`).join("");
+
+  const axes = drawn.map(d=>{
+    const right = d.si===1;
+    return d.ticks.map(t=>
+      `<text x="${right?R+4:L-4}" y="${(d.y(t)+3).toFixed(1)}" font-size="8.5"
+        fill="${d.s.color}" text-anchor="${right?"start":"end"}"
+        font-family="IBM Plex Sans Condensed, sans-serif">${d.f(t)}</text>`).join("");
+  }).join("");
+
+  const lines = drawn.map(d=>
+    `<polyline points="${d.pts.map(p=>`${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ")}"
+      fill="none" stroke="${d.s.color}" stroke-width="1.8" stroke-linejoin="round"/>`
+    + d.pts.map(p=>`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.2" fill="${d.s.color}"/>`).join("")
+  ).join("");
+
+  const idx = n<2 ? [0] : [0, Math.floor((n-1)/2), n-1];
+  const xlab = labels ? [...new Set(idx)].map(i=>
+    `<text x="${x(i).toFixed(1)}" y="${B+14}" font-size="8" fill="#6E7A66"
+      text-anchor="${i===0?"start":i===n-1?"end":"middle"}"
+      font-family="IBM Plex Sans Condensed, sans-serif">${(labels[i]||"").slice(5).replace("-","/")}</text>`).join("") : "";
+
+  const lgd = drawn.length>1 ? `<div class="lgd">${drawn.map(d=>
+    `<span><i style="background:${d.s.color}"></i>${d.s.name}${d.si===1?"（右軸）":"（左軸）"}</span>`).join("")}</div>` : "";
+
   return `<div class="chart"><h3>${title}</h3>
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-      <line x1="0" y1="${H-P}" x2="${W}" y2="${H-P}" stroke="#C6D0BC" stroke-width="1" vector-effect="non-scaling-stroke"/>
-      ${parts.map(p=>p.path).join("")}</svg>
-    <div class="lgd">${parts.map(p=>p.tag).join("")}</div></div>`;
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${title}">
+      ${grid}
+      <line x1="${L}" y1="${T}" x2="${L}" y2="${B}" stroke="#C6D0BC" stroke-width="1"/>
+      <line x1="${L}" y1="${B}" x2="${R}" y2="${B}" stroke="#C6D0BC" stroke-width="1"/>
+      ${drawn.length>1?`<line x1="${R}" y1="${T}" x2="${R}" y2="${B}" stroke="#C6D0BC" stroke-width="1"/>`:""}
+      ${axes}${lines}${xlab}
+    </svg>${lgd}</div>`;
 }
 function paceSec(p){
   if(!p) return null;
@@ -828,24 +861,25 @@ function paceSec(p){
 }
 function renderCharts(){
   const col = DB.records;
+  const lab = col.map(r=>r.date);
   const g = k => col.map(r=>r[k]??null);
   const f1 = v=>v.toFixed(1), f0 = v=>String(Math.round(v));
   const fp = v=>`${Math.floor(v/60)}'${String(Math.round(v%60)).padStart(2,"0")}"`;
   let html = "";
   html += lineChart("体脂肪量・除脂肪量 kg",[
     {name:"脂肪",color:"#C1442A",data:col.map(r=>bodyComp(r)?.fat??null),fmt:f1},
-    {name:"除脂肪",color:"#5C7A4A",data:col.map(r=>bodyComp(r)?.lean??null),fmt:f1}]);
+    {name:"除脂肪",color:"#5C7A4A",data:col.map(r=>bodyComp(r)?.lean??null),fmt:f1}], lab);
   html += lineChart("体重・7日平均",[{name:"体重kg",color:"#C1442A",data:g("w"),fmt:f1},
-    {name:"7日平均",color:"#3F6491",data:movAvg(g("w"),7),fmt:f1}]);
+    {name:"7日平均",color:"#3F6491",data:movAvg(g("w"),7),fmt:f1}], lab);
   html += lineChart("体重・BMI",[{name:"体重kg",color:"#C1442A",data:g("w"),fmt:f1},
-    {name:"BMI",color:"#3F6491",data:g("bmi"),fmt:f1}]);
-  html += lineChart("体脂肪率",[{name:"%",color:"#C1442A",data:g("fat"),fmt:f1}]);
+    {name:"BMI",color:"#3F6491",data:g("bmi"),fmt:f1}], lab);
+  html += lineChart("体脂肪率",[{name:"%",color:"#C1442A",data:g("fat"),fmt:f1}], lab);
   html += lineChart("筋肉量・筋肉スコア",[{name:"筋肉kg",color:"#5C7A4A",data:g("mus"),fmt:f1},
-    {name:"スコア",color:"#3F6491",data:g("ms"),fmt:f0}]);
-  html += lineChart("基礎代謝",[{name:"kcal",color:"#5C7A4A",data:g("bmr"),fmt:f0}]);
+    {name:"スコア",color:"#3F6491",data:g("ms"),fmt:f0}], lab);
+  html += lineChart("基礎代謝",[{name:"kcal",color:"#5C7A4A",data:g("bmr"),fmt:f0}], lab);
   html += lineChart("距離・ペース",[{name:"km",color:"#C1442A",data:g("dist"),fmt:f1},
-    {name:"ペース",color:"#3F6491",data:col.map(r=>paceSec(r.pace)),fmt:fp}]);
-  html += lineChart("消費カロリー",[{name:"kcal",color:"#5C7A4A",data:g("kcal"),fmt:f0}]);
+    {name:"ペース",color:"#3F6491",data:col.map(r=>paceSec(r.pace)),fmt:fp}], lab);
+  html += lineChart("消費カロリー",[{name:"kcal",color:"#5C7A4A",data:g("kcal"),fmt:f0}], lab);
   $("#charts").innerHTML = html || `<p class="msg">記録がまだありません。</p>`;
 }
 
@@ -863,6 +897,7 @@ function saveRecord(){
   if(i>=0) DB.records[i]=rec; else DB.records.push(rec);
   DB.records.sort((a,b)=>a.date.localeCompare(b.date));
   if(rec.type==="外ラン" && todayRoute){
+    rec.dir = todayRoute.dir;
     const r = DB.routes.find(x=>x.id===todayRoute.id); if(r) r.used=(r.used||0)+1;
   }
   renderCharts(); decide();
@@ -921,6 +956,17 @@ $("#loadBtn").onclick = ()=>sync("load");
 $("#syncBtn").onclick = ()=>sync("save");
 $("#gpxBtn").onclick = ()=>todayRoute && download(`${todayRoute.name}.gpx`, gpx(todayRoute),"application/gpx+xml");
 $("#shuffleBtn").onclick = ()=>{ if(todayRoute) pickRoute(todayRoute.target, todayRoute.id); };
+$("#libBtn").onclick = ()=>{ if(todayRoute) pickFromLibrary(todayRoute.target, todayRoute.id); };
+$("#dirChips").onclick = e=>{
+  const b = e.target.closest(".chip"); if(!b || !todayRoute) return;
+  pickRoute(todayRoute.target, todayRoute.id, b.dataset.dir);
+};
+$("#keepBtn").onclick = ()=>{
+  if(!todayRoute) return;
+  if(!DB.routes.some(r=>r.id===todayRoute.id)) DB.routes.push(todayRoute);
+  renderRoutes();
+  $("#todayMeta").insertAdjacentHTML("beforeend","<span>台帳に入れました</span>");
+};
 
 /* 設定は端末に覚えさせる（自分のiPhoneでしか開かない前提） */
 const REMEMBER = ["npoint","anthKey","fnBase","goalW"];
