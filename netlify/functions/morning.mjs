@@ -1,7 +1,9 @@
 /* 毎朝6時（JST）に、その日のメニューとルートを決めて npoint に書き込む。
    サイトを開いたときには決まっているので、待ち時間もAPI呼び出しも発生しない。
 
-   Netlify の定期実行は UTC 指定なので 21:00 UTC = 翌 06:00 JST。
+   この関数はHTTP専用。定期実行は scheduled-morning.mjs が担当する。
+   Netlifyでは schedule を指定した関数はHTTPから呼べなくなり403になるので、
+   「6時に自動」と「画面から組み直す」を1つの関数に同居させられない。
 
    必要な環境変数:
      ANTHROPIC_API_KEY / NPOINT_URL / APP_TOKEN / ORS_API_KEY
@@ -95,10 +97,10 @@ export default async (req) => {
   if(!store || !key) return bad("NPOINT_URL / ANTHROPIC_API_KEY が未設定です");
 
   const url = new URL(req.url);
-  const scheduled = !url.searchParams.has("t");       // 定期実行には合言葉が付かない
-  if(!scheduled && process.env.APP_TOKEN
-     && url.searchParams.get("t") !== process.env.APP_TOKEN)
+  if(process.env.APP_TOKEN && url.searchParams.get("t") !== process.env.APP_TOKEN)
     return bad("合言葉が違います", 401);
+  // ルート生成まで入れると10秒に収まらない。既定では指示だけ返す。
+  const scheduled = url.searchParams.get("route") === "1";
 
   const today = jstDate();
 
@@ -146,7 +148,7 @@ export default async (req) => {
 
     // 外ランならルートも先に用意しておく。
     // ただし手動呼び出しでは時間が足りないので、画面側に任せる。
-    const withRoute = scheduled || url.searchParams.get("route") === "1";
+    const withRoute = scheduled;
     let route = null;
     if(withRoute && !done && brief.mode === "外ラン" && brief.km){
       try{
@@ -177,6 +179,3 @@ export default async (req) => {
     return ok({date:today, brief, route, hasRoute: !!route, scheduled});
   }catch(e){ return bad(e.message, 502); }
 };
-
-/* 21:00 UTC = 06:00 JST */
-export const config = { schedule: "0 21 * * *" };

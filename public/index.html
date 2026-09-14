@@ -378,14 +378,10 @@ const TILE = "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
 const TILE_ATTR = '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>';
 
 /* ---------------- 状態 ---------------- */
-let DB = {
-  records: [
-    {date:"2026-09-08",type:"室内トレ",w:63.1,bmi:21.7,fat:16.9,mus:49.7,ms:0,vis:5.5,bone:2.7,bmr:1493,age:18,hard:3,memo:"割と疲れた"},
-    {date:"2026-09-09",type:"外ラン",w:63.4,bmi:21.8,fat:18.1,mus:49.2,ms:-1,vis:5.5,bone:2.7,bmr:1480,age:20,dist:3.01,time:"19:09",pace:"6'21\"",kcal:190,elev:55,pitch:137,hard:3,memo:"まぁ疲れたけど、こんなもんかって感じ"},
-    {date:"2026-09-10",type:"外ラン",w:63.5,bmi:21.9,fat:17.9,mus:49.4,ms:0,vis:5.5,bone:2.7,bmr:1486,age:19,dist:7.02,time:"40:56",pace:"5'50\"",kcal:452,elev:90,pitch:154,hard:4,memo:"筋肉痛の影響もあって結構きつかった"}
-  ],
-  routes: []
-};
+let DB = { records: [], routes: [] };
+/* 読み込みに成功するまで保存させない。
+   読めていない状態で保存すると、空のまま npoint を上書きしてしまう。 */
+let loaded = false;
 let todayRoute = null, selRoute = null, filterKm = 0, wxData = null;
 let map, rmap, mapLine, rmapLine;
 
@@ -484,6 +480,7 @@ function startBrief(){
   buildBrief();
 }
 function saveDay(){
+  if(!loaded) return;                 // 同上
   const t = today();
   t.brief = brief; t.route = todayRoute; t.chat = chat;
   sync("save", true);            // 遅延させない。閉じても次に開いたとき残るように
@@ -823,6 +820,7 @@ async function callFn(name, params, body){
     const head = text.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,80);
     throw new Error(
       res.status===404 ? `${name} 関数がデプロイされていません（404）`
+    : res.status===403 ? `${name} 関数を直接呼べません（403）`
     : res.status===502||res.status===504 ? `${name} が時間内に終わりませんでした（${res.status}）`
     : `${name} ${res.status}: ${head||"空のレスポンス"}`);
   }
@@ -1188,8 +1186,9 @@ function renderCharts(){
 
 /* ---------------- 保存 ---------------- */
 /* 変更のたびに npoint へ書き戻す。押し忘れると別の端末に反映されないため。 */
-let saveTimer = null, saving = false;
+let saveTimer = null, saving = false, lastCount = 0;
 function save(){
+  if(!loaded) return;                 // 読めていないなら絶対に書かない
   clearTimeout(saveTimer);
   saveTimer = setTimeout(()=>sync("save", true), 1200);
 }
@@ -1225,6 +1224,7 @@ async function sync(dir, quiet){
       const j = await callFn("data");
       DB = {records:j.records||[], routes:j.routes||[],
             settings:j.settings||{}, today:j.today||null};
+      loaded = true; lastCount = DB.records.length;
       if(DB.settings.goalW) $("#goalW").value = DB.settings.goalW;
       renderCharts(); renderRecords(); renderRoutes(); renderTally();
       toast(m,`読み込みました（記録 ${DB.records.length}件・ルート ${DB.routes.length}本）。`);
@@ -1232,13 +1232,18 @@ async function sync(dir, quiet){
       if(saving){ save(); return; }              // 書き込み中なら少し待って再試行
       saving = true;
       DB.settings = Object.assign({}, DB.settings, {goalW:Number($("#goalW").value)});
-      const j = await callFn("data", null, DB);
+      const j = await callFn("data", DB.records.length < lastCount ? {force:1} : null, DB);
+      lastCount = DB.records.length;
       saving = false;
       toast(m, quiet
         ? `自動保存 ${new Date().toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}`
         : `保存しました（記録 ${j.records}件・ルート ${j.routes}本）。`);
     }
-  }catch(e){ saving = false; toast(m,"通信に失敗しました: "+e.message,true); }
+  }catch(e){
+    saving = false;
+    toast(m, (dir==="load" ? "読み込めませんでした（保存は止めています）: " : "保存に失敗: ")
+      + e.message, true);
+  }
 }
 function toCSV(){
   const cols = ["date","type","w","bmi","fat","mus","ms","vis","bone","bmr","age","dist","time","pace","kcal","elev","pitch","hard","memo"];
@@ -1343,6 +1348,9 @@ renderCharts(); renderRecords(); renderRoutes(); renderTally(); renderChat();
 /* 読み込み → 天気 → 指示 の順を守る。天気が無い状態で指示を組まないため。 */
 (async () => {
   if($("#token").value) await sync("load");
+  if(!loaded && $("#token").value)
+    $("#syncMsg").innerHTML = `<span class="err">データを読み込めていません。`
+      + `この状態では保存しません。合言葉と通信を確認して読み込むを押してください。</span>`;
   const t = today();
   // 保存済みの指示や実施済みの記録があれば、通信を待たずに即出す
   if(t.brief || todayRecord()) startBrief();
