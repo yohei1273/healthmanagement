@@ -7,7 +7,9 @@
      ANTHROPIC_API_KEY / NPOINT_URL / APP_TOKEN / ORS_API_KEY
      URL は Netlify が自動で入れる（自サイトの /route を呼ぶのに使う）
 
-   手動でも叩ける: GET /morning?t=合言葉&force=1 */
+   手動でも叩ける: GET /morning?t=合言葉&force=1
+   定期実行は30秒使えるが、手動呼び出しは10秒で切られる。
+   手動のときはルート生成を画面側に任せて、指示だけ返す。 */
 
 const CORS = {"Access-Control-Allow-Origin":"*", "Content-Type":"application/json"};
 const ok  = o => new Response(JSON.stringify(o), {headers:CORS});
@@ -142,9 +144,11 @@ export default async (req) => {
                  .replace(/```json|```/g,"").trim();
     const brief = JSON.parse(txt);
 
-    // 外ランならルートも先に用意しておく
+    // 外ランならルートも先に用意しておく。
+    // ただし手動呼び出しでは時間が足りないので、画面側に任せる。
+    const withRoute = scheduled || url.searchParams.get("route") === "1";
     let route = null;
-    if(!done && brief.mode === "外ラン" && brief.km){
+    if(withRoute && !done && brief.mode === "外ラン" && brief.km){
       try{
         const base = process.env.URL || process.env.DEPLOY_PRIME_URL;
         const p = new URLSearchParams({km:String(brief.km), n:"8",
@@ -170,7 +174,7 @@ export default async (req) => {
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(db)});
     if(!w.ok) return bad(`npoint ${w.status}`, 502);
 
-    return ok({date:today, brief, route, hasRoute: !!route});
+    return ok({date:today, brief, route, hasRoute: !!route, scheduled});
   }catch(e){ return bad(e.message, 502); }
 };
 

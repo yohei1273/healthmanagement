@@ -14,12 +14,17 @@
      dir   … 方角（北/北東/東/南東/南/南西/西/北西 か 0-359）
      avoid … 直近に走った方角。そこから一番離れたものを選ぶ
      pts   … 周回の経由地数。既定 3。増やすほど道が複雑になる
+     roads … big（既定・太い道優先）か walk（歩行者向け・路地も使う）
 
    周回は経由地をランダムに置いて繋ぐ仕組みなので、経由地が多いと
    住宅街の細道を行ったり来たりする線になりやすい。既定を3に下げたうえで、
    進行方向の変化量を測って「曲がりの少ないもの」を優先する。 */
 
-const ORS = "https://api.heigit.org/openrouteservice/v2/directions/foot-walking/geojson";
+const ORS = p => `https://api.heigit.org/openrouteservice/v2/directions/${p}/geojson`;
+/* foot-walking は歩行者向けなので、路地や畦道まで平気で使う。
+   走って覚えられる道にしたいので、既定は cycling-road にする。
+   自転車向け＝車道沿いの太い道を優先するので、結果的に幹線寄りになる。 */
+const PROFILES = {big:"cycling-road", walk:"foot-walking"};
 
 const CORS = {"Access-Control-Allow-Origin":"*", "Content-Type":"application/json"};
 const ok  = o => new Response(JSON.stringify(o), {headers:CORS});
@@ -76,18 +81,85 @@ function wiggleOf(coords){
   return Math.round(sum);
 }
 
+/* ある地点で進行方向がどれだけ変わるか。前後およそ40m を見て測る。 */
+function turnAngleAt(coords, i){
+  const at = coords[i];
+  const back = pointBefore(coords, i, 40), fwd = pointAfter(coords, i, 40);
+  if(!back || !fwd) return 0;
+  return gap(bearingTo(back[1], back[0], at[1], at[0]),
+             bearingTo(at[1], at[0], fwd[1], fwd[0]));
+}
+function pointBefore(c, i, m){
+  for(let j=i-1; j>=0; j--) if(distM(c[j], c[i]) >= m) return c[j];
+  return c[0] === c[i] ? null : c[0];
+}
+function pointAfter(c, i, m){
+  for(let j=i+1; j<c.length; j++) if(distM(c[i], c[j]) >= m) return c[j];
+  return c[c.length-1] === c[i] ? null : c[c.length-1];
+}
+function distM(a, b){
+  const dx = (b[0]-a[0])*Math.cos(rad(b[1]))*111320, dy = (b[1]-a[1])*110540;
+  return Math.hypot(dx, dy);
+}
+
+/* ORSの手順から曲がり角の座標インデックスを拾う。
+   等間隔で点を打つと、直線の途中に点が落ちて肝心の交差点が抜ける。
+   曲がり角さえ押さえればGoogleも同じ道を選ぶので、そこだけを渡す。 */
+function turnPoints(f){
+  const segs = f.properties.segments || [];
+  const coords = f.geometry.coordinates;
+  const out = [];
+  for(const seg of segs){
+    const steps = seg.steps || [];
+    for(let k=1; k<steps.length; k++){
+      const st = steps[k];
+      if(st.type === 10) continue;                 // 到着は曲がり角ではない
+      const i = Array.isArray(st.way_points) ? st.way_points[0] : null;
+      if(i == null || i <= 0 || i >= coords.length-1) continue;
+      const a = turnAngleAt(coords, i);
+      if(a >= 25) out.push({i, a});                // ゆるいカーブは覚える必要がない
+    }
+  }
+  out.sort((x,y)=>x.i-y.i);
+  return out;
+}
+
+/* Googleマップの徒歩ナビ用URL。経由地は8個まで。
+   曲がり角が9個以上あるルートは、どう頑張っても完全再現できない。 */
+const MAX_WAY = 8;
+function gmapsUrl(coords, turns, lat, lng, outback){
+  const p = c => `${c[1].toFixed(6)},${c[0].toFixed(6)}`;
+  let list = turns, dest;
+  if(outback){
+    const half = Math.floor(coords.length/2);
+    dest = p(coords[half]);                        // 折返し地点が目的地
+    list = turns.filter(t => t.i < half);          // 行きの曲がり角だけ
+  }else{
+    dest = `${lat},${lng}`;
+  }
+  // 多すぎるときは曲がりの大きい順に残し、順序は元に戻す
+  if(list.length > MAX_WAY)
+    list = list.slice().sort((a,b)=>b.a-a.a).slice(0, MAX_WAY).sort((a,b)=>a.i-b.i);
+  const way = list.map(t => p(coords[t.i]));
+  return `https://www.google.com/maps/dir/?api=1&origin=${lat},${lng}`
+       + `&destination=${dest}`
+       + (way.length ? `&waypoints=${way.join("|")}` : "")
+       + `&travelmode=walking`;
+}
+
 function summarize(f, lat, lng){
   const c = f.geometry.coordinates;
   const cx = c.reduce((s,p)=>s+p[0],0)/c.length;
   const cy = c.reduce((s,p)=>s+p[1],0)/c.length;
+  const turns = turnPoints(f);
   return {dist:f.properties.summary.distance,
           ascent:f.properties.ascent ?? 0, descent:f.properties.descent ?? 0,
           bearing:Math.round(bearingTo(lat, lng, cy, cx)),
-          wiggle:wiggleOf(c), coords:c};
+          wiggle:wiggleOf(c), turns, turnCount:turns.length, coords:c};
 }
 
-async function post(key, body){
-  const send = b => fetch(ORS, {method:"POST",
+async function post(key, body, profile){
+  const send = b => fetch(ORS(profile), {method:"POST",
     headers:{Authorization:key, "Content-Type":"application/json",
              Accept:"application/geo+json"},
     body:JSON.stringify(b)});
@@ -99,16 +171,19 @@ async function post(key, body){
   return (await res.json()).features[0];
 }
 
+/* 階段や渡し船は走れないうえ、Googleマップの案内とも食い違うので外す */
+const AVOID = ["steps","ferries"];
+
 /* 周回：seedごとに1本 */
-async function loopTry(key, lat, lng, meters, seed, pts){
-  const f = await post(key, {coordinates:[[lng,lat]], elevation:true, instructions:false,
-    options:{round_trip:{length:meters, points:pts, seed}}});
+async function loopTry(key, lat, lng, meters, seed, pts, profile){
+  const f = await post(key, {coordinates:[[lng,lat]], elevation:true, instructions:true,
+    options:{round_trip:{length:meters, points:pts, seed}, avoid_features:AVOID}}, profile);
   return {seed, ...summarize(f, lat, lng)};
 }
 
 /* 往復：目標の半分だけ先へ行って引き返す。
    道のりは直線距離より長いので、実測を見て折返し地点を詰め直す。 */
-async function outBack(key, lat, lng, meters, bearing, tol, budgetMs){
+async function outBack(key, lat, lng, meters, bearing, tol, budgetMs, profile){
   const t0 = Date.now();
   let factor = 1.3, best = null;
   for(let i=0; i<3; i++){
@@ -116,7 +191,7 @@ async function outBack(key, lat, lng, meters, bearing, tol, budgetMs){
     if(i > 0 && best && Date.now() - t0 > budgetMs) break;
     const dest = destPoint(lat, lng, bearing, (meters/2)/factor);
     const f = await post(key, {coordinates:[[lng,lat], dest],
-      elevation:true, instructions:false});
+      elevation:true, instructions:true, options:{avoid_features:AVOID}}, profile);
     const one = summarize(f, lat, lng);
     const total = one.dist*2;
     const back = one.coords.slice(0,-1).reverse();
@@ -124,7 +199,8 @@ async function outBack(key, lat, lng, meters, bearing, tol, budgetMs){
             descent: one.ascent + one.descent,
             bearing: Math.round(bearingTo(lat, lng,
               one.coords[one.coords.length-1][1], one.coords[one.coords.length-1][0])),
-            wiggle: one.wiggle*2, coords: one.coords.concat(back), turn: one.dist};
+            wiggle: one.wiggle*2, coords: one.coords.concat(back),
+            turns: one.turns, turnCount: one.turns.length, turn: one.dist};
     const err = Math.abs(total - meters)/meters;
     if(err <= tol) break;
     factor = factor * (total/meters);          // 実測から補正して次の試行へ
@@ -145,6 +221,7 @@ export default async (req) => {
   const tol   = Number(url.searchParams.get("tol") || 0.05);
   const pts   = Math.max(2, Math.min(Number(url.searchParams.get("pts") || 3), 8));
   const shape = (url.searchParams.get("shape") || "loop").toLowerCase();
+  const profile = PROFILES[url.searchParams.get("roads") || "big"] || PROFILES.big;
   if(!(km >= 1 && km <= 30)) return bad("km は 1〜30 で指定してください");
 
   const want  = toBearing(url.searchParams.get("dir"));
@@ -165,21 +242,23 @@ export default async (req) => {
         : cand[Math.floor(Math.random()*8)];
     }
     try{
-      const r = await outBack(key, lat, lng, km*1000, b, tol, 5000);
+      const r = await outBack(key, lat, lng, km*1000, b, tol, 5000, profile);
       const err = Math.abs(r.dist/1000 - km)/km;
       if(err > Math.max(tol, 0.12))
         return bad(`目標 ${km}km に対して誤差 ${(err*100).toFixed(1)}% までしか寄せられませんでした`, 422);
       return ok({shape:"往復", target:km, km:Number((r.dist/1000).toFixed(2)),
         errPct:Number((err*100).toFixed(1)), ascent:Math.round(r.ascent),
         descent:Math.round(r.descent), bearing:r.bearing, dir:nameOf(r.bearing),
-        wiggle:r.wiggle, turnKm:Number((r.turn/1000).toFixed(2)), coords:r.coords});
+        wiggle:r.wiggle, turnKm:Number((r.turn/1000).toFixed(2)), coords:r.coords,
+        turnCount:r.turnCount, gmapsExact: r.turnCount <= MAX_WAY,
+        gmaps: gmapsUrl(r.coords, r.turns, lat, lng, true)});
     }catch(e){ return bad(e.message, 502); }
   }
 
   /* ---- 周回 ---- */
   const base = Date.now() % 100000;
   const tries = await Promise.allSettled(
-    Array.from({length:n}, (_,i) => loopTry(key, lat, lng, km*1000, base + i*37, pts))
+    Array.from({length:n}, (_,i) => loopTry(key, lat, lng, km*1000, base + i*37, pts, profile))
   );
   const got = tries.filter(t => t.status === "fulfilled").map(t => t.value);
   if(!got.length){
@@ -204,8 +283,12 @@ export default async (req) => {
     const best = Math.max(...fit.map(sep));
     pool = fit.filter(r => sep(r) >= best - 25);
   }
-  pool.sort((a,b) => a.wiggle - b.wiggle || a.err - b.err);
-  const best = pool[0];
+  /* Googleの経由地は8個までなので、曲がり角がそれ以内なら案内を完全再現できる。
+     再現できるものを優先し、その中で曲がりの少ないものを選ぶ。 */
+  const exact = pool.filter(r => r.turnCount <= MAX_WAY);
+  const use = exact.length ? exact : pool;
+  use.sort((a,b) => a.turnCount - b.turnCount || a.wiggle - b.wiggle || a.err - b.err);
+  const best = use[0];
 
   return ok({
     shape: "周回", target: km,
@@ -215,7 +298,10 @@ export default async (req) => {
     bearing: best.bearing, dir: nameOf(best.bearing),
     wiggle: best.wiggle, pts,
     coords: best.coords,
+    turnCount: best.turnCount,
+    gmapsExact: best.turnCount <= MAX_WAY,
+    gmaps: gmapsUrl(best.coords, best.turns, lat, lng, false),
     tried: n, kept: fit.length,
-    wiggles: pool.map(r => r.wiggle)
+    turnCounts: use.map(r => r.turnCount)
   });
 };

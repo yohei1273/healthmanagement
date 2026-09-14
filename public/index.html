@@ -200,16 +200,21 @@ nav button.on{color:var(--ink);border-top-color:var(--vermilion)}
       <div id="map"></div>
       <div class="rmeta" id="todayMeta"></div>
       <div class="grid" style="margin-top:12px">
-        <button class="ghost" id="gpxBtn">GPXを保存</button>
+        <button class="ghost" id="navBtn">Googleマップで案内</button>
         <button class="ghost" id="shuffleBtn">別のルートを作る</button>
       </div>
       <div class="grid" style="margin-top:10px">
         <button class="ghost" id="keepBtn">台帳に残す</button>
-        <button class="ghost" id="libBtn">台帳から選ぶ</button>
+        <button class="ghost" id="gpxBtn">GPXを保存</button>
       </div>
       <div class="chips" id="shapeChips" style="margin-top:10px">
         <button class="chip on" data-shape="loop">周回</button>
         <button class="chip" data-shape="outback">往復</button>
+        <button class="chip" id="libBtn">台帳から</button>
+      </div>
+      <div class="chips" id="roadChips">
+        <button class="chip on" data-roads="big">太い道</button>
+        <button class="chip" data-roads="walk">歩行者向け</button>
       </div>
       <div class="chips" id="dirChips"></div>
       </div>
@@ -510,7 +515,9 @@ async function buildBrief(){
     renderBrief(true);
     if(brief.mode === "外ラン" && brief.km && !todayRoute)
       pickRoute(Number(brief.km), null, brief.direction);
-  }catch(e){ fallbackBrief("指示を組み立てられませんでした（"+e.message+"）。"); }
+  }catch(e){
+    fallbackBrief("指示を組み立てられませんでした。" + e.message);
+  }
   briefBusy = false;
   $("#reqBtn").disabled = false;
 }
@@ -521,7 +528,7 @@ function fallbackBrief(msg){
   brief = {
     mode: (wxData && (wxData.prec>=0.5 || [95,96,99].includes(wxData.code))) ? "室内トレ" : "外ラン",
     km: lr ? lr.dist : 3,
-    headline: "前回と同じ内容",
+    headline: "指示を作れませんでした",
     reason: msg,
     stretchPre: [["足首回し","左右10回"],["股関節回し","左右10回"],["レッグスイング","左右10回"],["もも上げウォーク","20歩"]],
     stretchPost: [["ふくらはぎ","左右30秒"],["ハムストリング","左右30秒"],["大腿四頭筋","左右30秒"],["殿筋","左右30秒"]],
@@ -672,6 +679,8 @@ function showTodayRoute(){
      <span>登り <b>${Math.round(r.ascent)}</b> m</span>
      ${r.dir?`<span>方角 <b>${r.dir}</b></span>`:""}
      ${r.turnKm?`<span>折返し <b>${r.turnKm}</b> km地点</span>`:""}
+     ${r.turnCount!=null?`<span>曲がり角 <b>${r.turnCount}</b>${
+       r.gmapsExact?"":" ・案内は近似"}</span>`:""}
      <span>目標 ${r.target} km${r.errPct!=null?`（誤差 ${r.errPct}%）`:""}</span>`;
   if(!map){
     map = L.map("map",{zoomControl:false,attributionControl:true}).setView(START,15);
@@ -684,6 +693,7 @@ function showTodayRoute(){
   setTimeout(()=>map.invalidateSize(),80);
   drawProfile("#todayProf", r);
   if(r.shape) shapeMode = r.shape === "往復" ? "outback" : "loop";
+  $("#navBtn").disabled = !r.gmaps;
   renderRouteControls(r.dir);
 }
 /* ルートが作れたかどうかに関わらず、形状と方角は常に選べる状態にしておく */
@@ -732,9 +742,9 @@ function download(name, text, mime){
 function recentDirs(){
   return DB.records.filter(r=>r.dir).slice(-3).map(r=>r.dir);
 }
-let shapeMode = "loop";
+let shapeMode = "loop", roadsMode = "big";
 async function freshRoute(km, dir){
-  const p = {km, n:8, shape:shapeMode};
+  const p = {km, n:8, shape:shapeMode, roads:roadsMode};
   if(dir) p.dir = dir;
   const av = recentDirs();
   if(av.length) p.avoid = av.join(",");
@@ -742,6 +752,7 @@ async function freshRoute(km, dir){
   return {id:uid(), name:`${km}km ${r.dir}へ${r.shape}`,
           target:r.target, km:r.km, ascent:r.ascent, descent:r.descent,
           bearing:r.bearing, dir:r.dir, shape:r.shape, turnKm:r.turnKm,
+          gmaps:r.gmaps, gmapsExact:r.gmapsExact, turnCount:r.turnCount,
           coords:r.coords, created:iso(new Date()), used:0, errPct:r.errPct};
 }
 async function generate(){
@@ -750,10 +761,11 @@ async function generate(){
   const line = (t,c)=>{ log.insertAdjacentHTML("beforeend",`<div class="${c||""}">${t}</div>`); log.scrollTop=log.scrollHeight; };
   $("#genBtn").disabled = true; $("#genBtn").textContent = "生成中…";
   try{
-    const r = await callFn("route", {km, n, shape:shapeMode});
+    const r = await callFn("route", {km, n, shape:shapeMode, roads:roadsMode});
     DB.routes.push({id:uid(), name:`${km}km-${String(DB.routes.length+1).padStart(2,"0")}`,
       target:r.target, km:r.km, ascent:r.ascent, descent:r.descent,
-      bearing:r.bearing, dir:r.dir, shape:r.shape,
+      bearing:r.bearing, dir:r.dir, shape:r.shape, gmaps:r.gmaps,
+      gmapsExact:r.gmapsExact, turnCount:r.turnCount,
       coords:r.coords, created:iso(new Date()), used:0});
     line(`${r.km.toFixed(2)}km（誤差 ${r.errPct}%）を台帳に追加。${r.tried}本試して ${r.kept}本が合格。`, "ok");
     renderRoutes(); save();
@@ -809,9 +821,10 @@ async function callFn(name, params, body){
   try{ j = JSON.parse(text); }catch(e){
     // JSONでない＝関数のタイムアウトやクラッシュ。中身の頭を見せる
     const head = text.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,80);
-    throw new Error(res.status===502||res.status===504
-      ? `${name} が時間内に終わりませんでした（${res.status}）`
-      : `${name} ${res.status}: ${head||"空のレスポンス"}`);
+    throw new Error(
+      res.status===404 ? `${name} 関数がデプロイされていません（404）`
+    : res.status===502||res.status===504 ? `${name} が時間内に終わりませんでした（${res.status}）`
+    : `${name} ${res.status}: ${head||"空のレスポンス"}`);
   }
   if(!res.ok) throw new Error(j.error||`${name} ${res.status}`);
   return j;
@@ -1274,10 +1287,22 @@ $("#recList").onclick = e=>{
 $("#loadBtn").onclick = ()=>sync("load");
 $("#syncBtn").onclick = ()=>sync("save");
 $("#gpxBtn").onclick = ()=>todayRoute && download(`${todayRoute.name}.gpx`, gpx(todayRoute),"application/gpx+xml");
+$("#navBtn").onclick = ()=>{
+  if(!todayRoute || !todayRoute.gmaps) return;
+  if(todayRoute.gmapsExact === false &&
+     !confirm(`曲がり角が${todayRoute.turnCount}箇所あり、Googleに渡せる経由地は8つまでです。\n案内のルートが少しずれる可能性があります。開きますか？`)) return;
+  window.open(todayRoute.gmaps, "_blank");
+};
+$("#roadChips").onclick = e=>{
+  const b = e.target.closest(".chip"); if(!b) return;
+  roadsMode = b.dataset.roads;
+  $("#roadChips").querySelectorAll(".chip").forEach(x=>x.classList.toggle("on",x===b));
+  pickRoute(targetKm(), todayRoute && todayRoute.id, todayRoute && todayRoute.dir);
+};
 $("#shuffleBtn").onclick = ()=>pickRoute(targetKm(), todayRoute && todayRoute.id, todayRoute && todayRoute.dir);
 $("#libBtn").onclick = ()=>pickFromLibrary(targetKm(), todayRoute && todayRoute.id);
 $("#shapeChips").onclick = e=>{
-  const b = e.target.closest(".chip"); if(!b) return;
+  const b = e.target.closest(".chip"); if(!b || !b.dataset.shape) return;
   shapeMode = b.dataset.shape;
   $("#shapeChips").querySelectorAll(".chip").forEach(x=>x.classList.toggle("on",x===b));
   pickRoute(targetKm(), todayRoute && todayRoute.id, todayRoute && todayRoute.dir);
