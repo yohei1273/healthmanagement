@@ -6,7 +6,7 @@ netlify/functions/healthplanet.mjs   体組成をタニタから取ってくる
 netlify/functions/route.mjs          周回ルートを作る
 netlify/functions/ai.mjs             Anthropic API への中継
 netlify/functions/data.mjs           記録の読み書き
-netlify/functions/morning.mjs        その日のメニューを決める（HTTP）
+netlify/functions/brief.mjs          その日のメニューを決める（HTTP）
 netlify/functions/scheduled-morning.mjs  毎朝6時に上を呼ぶ（定期実行）
 netlify.toml
 ```
@@ -104,10 +104,12 @@ ORSのseedはどっちを向くか事前に分からないので、測ってか�
 書いてあるので、デプロイすると Netlify が自動で毎日 21:00 UTC
 （＝日本時間の翌朝6時）に実行します。設定画面での操作は不要です。
 
-判断の中身は `morning.mjs` にあり、こちらは HTTP 専用です。
+判断の中身は `brief.mjs` にあり、こちらは HTTP 専用です。
+（以前は `morning.mjs` でしたが、一度スケジュール登録された名前は設定を外しても
+HTTPが403で弾かれ続けたため改名しました。`morning` は使わないでください。）
 **Netlify では schedule を指定した関数を HTTP から呼ぶと 403 になります。**
 そのため「6時に自動」と「画面から組み直す」を1つの関数にまとめられません。
-`scheduled-morning` が `morning` → `route` → npoint書き戻し の順に呼びます。
+`scheduled-morning` が `brief` → `route` → npoint書き戻し の順に呼びます。
 
 6時の時点で天気を取り、その日のメニューとルートを決めて npoint に保存します。
 起きてサイトを開いたときには決まっているので、待ち時間もありません。
@@ -115,7 +117,7 @@ ORSのseedはどっちを向くか事前に分からないので、測ってか�
 手動で試すには合言葉付きで叩きます。
 
 ```
-https://<サイト>/.netlify/functions/morning?t=<合言葉>&force=1
+https://<サイト>/.netlify/functions/brief?t=<合言葉>&force=1
 ```
 
 `force` を付けないと、すでに決まっている日は何もしません。

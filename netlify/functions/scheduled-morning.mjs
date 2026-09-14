@@ -1,7 +1,7 @@
 /* 毎朝6時（JST）に動く定期実行。21:00 UTC = 翌 06:00 JST。
 
    Netlify では schedule を指定した関数はHTTPから呼べなくなるので、
-   判断の中身は morning.mjs（HTTP専用）に置いたまま、ここから順に呼ぶ。
+   判断の中身は brief.mjs（HTTP専用）に置いたまま、ここから順に呼ぶ。
    関数1本あたりの実行時間は10秒だが、定期実行は30秒使えるので、
    「指示を作る」→「ルートを作る」→「ルートを書き戻す」を分けて回せる。
 
@@ -18,9 +18,9 @@ export default async () => {
   const log = [];
   try{
     // 1. その日の指示を作って npoint に保存させる
-    const r1 = await fetch(`${base}/.netlify/functions/morning?t=${token}&force=1`);
+    const r1 = await fetch(`${base}/.netlify/functions/brief?t=${token}&force=1`);
     const j1 = await r1.json();
-    if(j1.error) return ok({step:"morning", error:j1.error});
+    if(j1.error) return ok({step:"brief", error:j1.error});
     log.push(`指示: ${j1.brief?.mode} ${j1.brief?.km ?? ""}`);
 
     const brief = j1.brief;

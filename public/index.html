@@ -504,8 +504,8 @@ async function buildBrief(){
   $("#verdict").textContent = "判断中…";
   $("#reqBtn").disabled = true;
   try{
-    // 判断は morning 関数に集約してある。ここは呼ぶだけ。
-    const j = await callFn("morning", {force:1});
+    // 判断は brief 関数に集約してある。ここは呼ぶだけ。
+    const j = await callFn("brief", {force:1});
     brief = j.brief;
     todayRoute = j.route || null;
     today().brief = brief; today().route = todayRoute;

@@ -2,14 +2,17 @@
    サイトを開いたときには決まっているので、待ち時間もAPI呼び出しも発生しない。
 
    この関数はHTTP専用。定期実行は scheduled-morning.mjs が担当する。
-   Netlifyでは schedule を指定した関数はHTTPから呼べなくなり403になるので、
-   「6時に自動」と「画面から組み直す」を1つの関数に同居させられない。
+
+   Netlifyでは schedule を指定した関数はHTTPから呼べず403になる。
+   さらに、一度スケジュール登録された関数名は設定を外しても登録が残り、
+   HTTPを弾き続けることがある。以前 morning.mjs が該当したため、
+   名前を brief に変えてある。morning という名前は今後使わないこと。
 
    必要な環境変数:
      ANTHROPIC_API_KEY / NPOINT_URL / APP_TOKEN / ORS_API_KEY
      URL は Netlify が自動で入れる（自サイトの /route を呼ぶのに使う）
 
-   手動でも叩ける: GET /morning?t=合言葉&force=1
+   手動でも叩ける: GET /brief?t=合言葉&force=1
    定期実行は30秒使えるが、手動呼び出しは10秒で切られる。
    手動のときはルート生成を画面側に任せて、指示だけ返す。 */
 
