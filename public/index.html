@@ -108,7 +108,12 @@ legend{font-size:12px;color:var(--sub);padding-bottom:6px}
 
 /* charts */
 .chart{margin-bottom:18px}
-.chart h3{font-size:12.5px;font-weight:500;color:var(--sub);margin-bottom:4px}
+.chart h3{font-size:12.5px;font-weight:500;color:var(--sub);margin-bottom:4px;
+  display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.chart .readout{font-family:var(--num);font-size:12.5px;color:var(--ink);
+  font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.chart svg .hits rect{cursor:pointer}
 .chart svg{display:block;width:100%;height:auto}
 .lgd{display:flex;gap:12px;font-size:11.5px;color:var(--sub);margin-top:2px}
 .lgd i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:4px}
@@ -1114,6 +1119,7 @@ function lineChart(title, series, labels){
     const f = s.fmt || (v=>v.toFixed(1));
     const ticks = [mn, (mn+mx)/2, mx];
     drawn.push({s, si, y, f, ticks,
+      ys: s.data.map(v => v==null ? null : y(v)),
       pts: s.data.map((v,i)=>v==null?null:[x(i), y(v)]).filter(Boolean)});
   });
   if(!drawn.length) return "";
@@ -1137,6 +1143,22 @@ function lineChart(title, series, labels){
     + d.pts.map(p=>`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.2" fill="${d.s.color}"/>`).join("")
   ).join("");
 
+  /* 各点の読み取り内容を先に作っておく。タップやホバーで出すだけにするため。 */
+  const read = [];
+  for(let i=0; i<n; i++){
+    const parts = drawn.map(d=>{
+      const v = d.s.data[i];
+      return v==null ? null : `${d.s.name} ${d.f(v)}`;
+    }).filter(Boolean);
+    read.push((labels && labels[i] ? labels[i].slice(5).replace("-","/")+"　" : "")
+      + (parts.length ? parts.join("　") : "記録なし"));
+  }
+  /* 透明な短冊を並べて、どの点に触れたかを拾う */
+  const step = n<2 ? (R-L) : (R-L)/(n-1);
+  const hits = Array.from({length:n}, (_,i)=>
+    `<rect x="${(x(i)-step/2).toFixed(1)}" y="${T}" width="${Math.max(step,6).toFixed(1)}"
+      height="${B-T}" fill="transparent" data-i="${i}"/>`).join("");
+
   const idx = n<2 ? [0] : [0, Math.floor((n-1)/2), n-1];
   const xlab = labels ? [...new Set(idx)].map(i=>
     `<text x="${x(i).toFixed(1)}" y="${B+14}" font-size="8" fill="#6E7A66"
@@ -1146,15 +1168,56 @@ function lineChart(title, series, labels){
   const lgd = drawn.length>1 ? `<div class="lgd">${drawn.map(d=>
     `<span><i style="background:${d.s.color}"></i>${d.s.name}${d.si===1?"（右軸）":"（左軸）"}</span>`).join("")}</div>` : "";
 
-  return `<div class="chart"><h3>${title}</h3>
+  const meta = {read, xs: Array.from({length:n},(_,i)=>Number(x(i).toFixed(1))),
+                ys: drawn[0].ys.map(v => v==null ? null : Number(v.toFixed(1)))};
+  const esc = s => s.replace(/&/g,"&amp;").replace(/'/g,"&#39;").replace(/</g,"&lt;");
+
+  return `<div class="chart" data-meta='${esc(JSON.stringify(meta))}'>
+    <h3>${title}<span class="readout"></span></h3>
     <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${title}">
       ${grid}
       <line x1="${L}" y1="${T}" x2="${L}" y2="${B}" stroke="#C6D0BC" stroke-width="1"/>
       <line x1="${L}" y1="${B}" x2="${R}" y2="${B}" stroke="#C6D0BC" stroke-width="1"/>
       ${drawn.length>1?`<line x1="${R}" y1="${T}" x2="${R}" y2="${B}" stroke="#C6D0BC" stroke-width="1"/>`:""}
       ${axes}${lines}${xlab}
+      <line class="guide" y1="${T}" y2="${B}" stroke="#232A21" stroke-width="1"
+        stroke-dasharray="2 2" opacity="0"/>
+      <circle class="mark" r="4" fill="none" stroke="#232A21" stroke-width="1.4" opacity="0"/>
+      <g class="hits">${hits}</g>
     </svg>${lgd}</div>`;
 }
+/* グラフ上の点をタップ／ホバーすると、その日の数字を見出しの横に出す。
+   スマホでは指を離しても残るようにして、読み取れるようにする。 */
+function showPoint(chart, i){
+  const meta = chart._meta || (chart._meta = JSON.parse(chart.dataset.meta));
+  if(i == null || i < 0 || i >= meta.read.length) return;
+  chart.querySelector(".readout").textContent = meta.read[i];
+  const g = chart.querySelector(".guide"), m = chart.querySelector(".mark");
+  g.setAttribute("x1", meta.xs[i]); g.setAttribute("x2", meta.xs[i]);
+  g.setAttribute("opacity", "0.35");
+  if(meta.ys[i] != null){
+    m.setAttribute("cx", meta.xs[i]); m.setAttribute("cy", meta.ys[i]);
+    m.setAttribute("opacity", "1");
+  }else m.setAttribute("opacity", "0");
+}
+function clearPoint(chart){
+  chart.querySelector(".readout").textContent = "";
+  chart.querySelector(".guide").setAttribute("opacity", "0");
+  chart.querySelector(".mark").setAttribute("opacity", "0");
+}
+function bindCharts(){
+  const box = $("#charts");
+  const pick = e => {
+    const r = e.target.closest("rect[data-i]");
+    const chart = e.target.closest(".chart");
+    if(r && chart) showPoint(chart, Number(r.dataset.i));
+  };
+  box.addEventListener("pointerdown", pick);
+  box.addEventListener("pointermove", e => { if(e.pointerType === "mouse") pick(e); });
+  box.addEventListener("pointerleave", () =>
+    box.querySelectorAll(".chart").forEach(clearPoint), true);
+}
+
 function paceSec(p){
   if(!p) return null;
   const m = String(p).match(/(\d+)['’:](\d+)/);
@@ -1344,6 +1407,7 @@ const now = new Date();
 $("#today").textContent = now.toLocaleDateString("ja-JP",{month:"long",day:"numeric",weekday:"short"});
 $("#f-date").value = iso(now);
 loadSettings();
+bindCharts();
 renderCharts(); renderRecords(); renderRoutes(); renderTally(); renderChat();
 /* 読み込み → 天気 → 指示 の順を守る。天気が無い状態で指示を組まないため。 */
 (async () => {
