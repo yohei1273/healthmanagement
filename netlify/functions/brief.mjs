@@ -71,9 +71,14 @@ reason ではその日の走りを踏まえた言葉をかけ、stretchPre は�
 規則:
 - modeが外ランならkmを入れ、indoorは空配列にする。
 - modeが室内トレまたは回復ならkmはnull、indoorを埋める。
-- 「今朝のやりとり」に彼の言葉があれば最優先で反映する。時間がない・坂を走りたい・
-  膝が痛い・遠くまで行きたい等、内容に応じて距離も方角もメニューも変える。
-  ただし痛みや不調の訴えには無理をさせない方向で応じる。
+- 「本人の最新の発言」は指示として扱う。距離・方角・コースの形・内容を
+  はっきり指定されたら、その通りにする。「3〜4kmにしよう」と言われたら
+  km は 3 か 4 にする。5 にしてはいけない。自分の判断で上書きしない。
+  従えない理由があるとき（痛みの訴えがある、天候が危険）は、
+  従わない理由を reason で必ず説明する。
+- 「今朝のやりとり」は会話の流れ。時間がない・坂を走りたい・膝が痛い等、
+  内容に応じて距離も方角もメニューも変える。
+  痛みや不調の訴えには無理をさせない方向で応じる。
 - shapeはコースの形。迷いたくない日やペースを一定に保ちたい日は "往復"、
   景色を変えたい日は "周回"。こだわりがなければ null。
 - directionは今日どちら方面へ走るか。直近数日の「走った方角」を見て、
@@ -102,6 +107,13 @@ export default async (req) => {
   const url = new URL(req.url);
   if(process.env.APP_TOKEN && url.searchParams.get("t") !== process.env.APP_TOKEN)
     return bad("合言葉が違います", 401);
+
+  /* 会話はリクエストに載せてもらう。npointから読み直すと、保存の遅れや
+     日付のずれで丸ごと落ちることがある（実際に落ちていた）。 */
+  let sent = null;
+  if(req.method === "POST"){
+    try{ sent = (await req.json()).chat; }catch{}
+  }
   // ルート生成まで入れると10秒に収まらない。既定では指示だけ返す。
   const scheduled = url.searchParams.get("route") === "1";
 
@@ -118,12 +130,16 @@ export default async (req) => {
       return ok({skipped:true, reason:"今日の指示はもう決まっています", date:today});
 
     const done = db.records.find(r => r.date === today && (r.dist || r.type)) || null;
-    const said = (t.chat||[]).filter(m => m.role === "user").map(m => m.content);
+    const talk = Array.isArray(sent) && sent.length ? sent : (t.chat || []);
+    // 発言者ごと・順番どおりに渡す。彼の言葉だけ抜き出すと文脈が消える
+    const said = talk.slice(-16).map(m => (m.role === "user" ? "本人: " : "コーチ: ") + m.content);
+    const latest = [...talk].reverse().find(m => m.role === "user");
     const dist = db.records.reduce((s,r)=>s+(r.dist||0), 0);
 
     const ctx = {
       今日: today,
       今朝のやりとり: said.length ? said : "なし",
+      本人の最新の発言: latest ? latest.content : "なし",
       今日すでに実施した内容: done ? {内容:done.type, 距離:done.dist, 時間:done.time,
         ペース:done.pace, きつさ:done.hard, メモ:done.memo} : "まだ何もしていない",
       積み上げ: {通算距離:Number(dist.toFixed(1)), 記録数:db.records.length},
@@ -140,7 +156,7 @@ export default async (req) => {
       method:"POST",
       headers:{"Content-Type":"application/json", "x-api-key":key,
                "anthropic-version":"2023-06-01"},
-      body: JSON.stringify({model:"claude-sonnet-4-6", max_tokens:1500,
+      body: JSON.stringify({model:"claude-opus-4-5", max_tokens:1500,
         messages:[{role:"user", content: PROMPT + "\n\n" + JSON.stringify(ctx, null, 1)}]})
     });
     if(!ai.ok) return bad(`Anthropic ${ai.status}`, 502);
