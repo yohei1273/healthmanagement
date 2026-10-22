@@ -31,12 +31,95 @@ const daysAgo = (date, today) =>
   Math.round((new Date(today+"T12:00:00") - new Date(date+"T12:00:00"))/864e5);
 const labelOf = n => n===0 ? "今日" : n===1 ? "昨日" : n===2 ? "一昨日" : `${n}日前`;
 
-const PROMPT = `あなたは名古屋市緑区に住む20代男性のランニングコーチ兼トレーナーです。
+/* 体脂肪量と除脂肪量。減量の主指標なのに毎回モデルに掛け算させるのは筋が悪い。 */
+function comp(r){
+  if(r == null || r.w == null || r.fat == null) return null;
+  const fat = r.w * r.fat / 100;
+  return {fat: Number(fat.toFixed(2)), lean: Number((r.w - fat).toFixed(2))};
+}
+/* 直近の体組成と、7件前との差 */
+function trend(records){
+  const withComp = records.filter(r => comp(r));
+  if(!withComp.length) return "体重と体脂肪率の記録がまだありません";
+  const now = comp(withComp[withComp.length-1]);
+  const past = comp(withComp.length >= 7 ? withComp[withComp.length-7] : withComp[0]);
+  const span = withComp.length >= 7 ? "7回前との差" : `最初の記録（${withComp[0].date}）との差`;
+  return {
+    体脂肪量kg: now.fat, 除脂肪量kg: now.lean,
+    [span]: {体脂肪量: Number((now.fat-past.fat).toFixed(2)),
+             除脂肪量: Number((now.lean-past.lean).toFixed(2))}
+  };
+}
+
+/* 週ごとの距離。故障は「先週までより急に増やしたとき」に出るので、
+   伸ばし方が妥当かどうかを見るための材料。 */
+function weekly(records, today){
+  const end = new Date(today + "T12:00:00");
+  const out = [];
+  for(let w=0; w<4; w++){
+    const hi = new Date(end); hi.setDate(hi.getDate() - w*7);
+    const lo = new Date(hi);  lo.setDate(lo.getDate() - 6);
+    const km = records.filter(r => {
+      const d = new Date(r.date + "T12:00:00");
+      return d >= lo && d <= hi;
+    }).reduce((a,r) => a + (r.dist||0), 0);
+    out.push({[w===0 ? "直近7日" : `${w*7+1}〜${w*7+7}日前`]: Number(km.toFixed(1))});
+  }
+  return out;
+}
+/* 前回の外ランから何日空いたか */
+function sinceLastRun(records, today){
+  const last = [...records].reverse().find(r => r.dist);
+  if(!last) return "外ランの記録なし";
+  return daysAgo(last.date, today);
+}
+
+/* 連続日数はこちらで数えて渡す。
+   記録一覧から数えさせると取り違えるので、計算済みの値だけを使わせる。 */
+function streakOf(records, today){
+  const done = new Set(records.filter(r => r.type && r.type !== "未実施").map(r => r.date));
+  const d = new Date(today + "T12:00:00");
+  if(!done.has(today)) d.setDate(d.getDate() - 1);
+  let n = 0;
+  while(done.has(d.toISOString().slice(0,10))){ n++; d.setDate(d.getDate() - 1); }
+  return n;
+}
+
+const PROMPT = `あなたは名古屋市緑区に住む20代男性のトレーナーです。
 彼は毎朝、滝ノ水中央公園を起終点に走るか、天候が悪ければ室内で自重トレをします。
 目的は減量で、目標体重に向けて脂肪を落としつつ筋肉は保ちたい。
 
+話し方は敬語。丁寧だが堅苦しくせず、言うべきことは率直に言う。タメ口は使わない。
+
+走る速さは彼の目的ではありません。ペース・タイム・ピッチには触れないこと。
+遅くなったことを指摘しない。本人が訊いたときだけ答える。
+
+彼は食事の管理をしていません。食事の記録も取っていないので、
+食事内容について具体的に尋ねたり指摘したりしないでください。
+走る量だけで体重を大きく動かすのは難しい（7kmでも450kcal程度、
+脂肪1kgは7200kcal）という前提は踏まえつつ、
+あなたが手を出せるのは運動の中身だけです。そこで最善を尽くしてください。
+体重が横ばいでも、体脂肪量が減って除脂肪量が保てていれば前進です。
+
 各記録には「いつ」が付いています。日付から自分で何日前かを計算せず、
 必ずその表記に従ってください。「今日」と書かれた記録は今日のことです。
+
+「積み上げ」と「体組成の現状」の数字はこちらで計算済みです。
+連続日数・今月の距離・通算距離・体脂肪量・除脂肪量とその増減は、
+記録一覧から計算し直さず、必ずその値をそのまま使ってください。
+自分で計算すると取り違えます。
+
+体重は水分で1〜2kg動くので、日々の増減では判断しないこと。
+見るべきは体脂肪量が減っているか、除脂肪量が保てているかの2点です。
+
+距離を伸ばすかどうかは「週ごとの距離」で判断してください。
+週合計が前週の1.1倍を超える伸ばし方は故障が出やすい水準です。
+逆に、週合計が頭打ちなら少し伸ばす提案をしてください。
+「最長距離」を大きく超える距離を単発で出さないこと。
+
+「これから3時間」の予報も見てください。今は晴れていても、
+1時間後に降り出すなら距離を短めにする、先に出るよう促す、といった判断ができます。
+日の出前なら暗さにも触れてください。
 
 「今日すでに実施した内容」に記録がある場合、彼はもう今日の運動を終えています。
 その場合は新しいメニューを出さず、mode はやった内容をそのまま入れ、
@@ -65,7 +148,7 @@ reason ではその日の走りを踏まえた言葉をかけ、stretchPre は�
  "stretchPre": [["種目名","回数や秒数"], ...],
  "stretchPost": [["種目名","回数や秒数"], ...],
  "indoor": [["種目名","回数×セット"], ...],
- "note": "今日気をつけること、または減量の進み具合について1〜2文"
+ "note": "今日気をつけること、または体組成の動きについて1〜2文"
 }
 
 規則:
@@ -92,11 +175,27 @@ async function weather(){
   try{
     const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${START[0]}`
       + `&longitude=${START[1]}&current=temperature_2m,apparent_temperature,precipitation,`
-      + `weather_code,wind_speed_10m&timezone=Asia%2FTokyo`);
-    const c = (await r.json()).current;
+      + `weather_code,wind_speed_10m`
+      + `&hourly=temperature_2m,precipitation_probability,weather_code`
+      + `&daily=sunrise,sunset&forecast_days=1&timezone=Asia%2FTokyo`);
+    const j = await r.json(), c = j.current;
+    const now = new Date(Date.now() + 9*3600e3).getUTCHours();
+    const h = j.hourly || {};
+    // これから3時間の見通し。走り出すかどうかの判断に直結する
+    const ahead = [];
+    for(let k=0; k<(h.time||[]).length; k++){
+      const hh = Number(h.time[k].slice(11,13));
+      if(hh >= now && hh <= now+3)
+        ahead.push({時刻:`${hh}時`, 気温:h.temperature_2m[k],
+                    降水確率:h.precipitation_probability[k],
+                    天気:WX[h.weather_code[k]] || "不明"});
+    }
     return {気温:c.temperature_2m, 体感:c.apparent_temperature, 天気:WX[c.weather_code]||"不明",
             降水mm:c.precipitation, 風速:c.wind_speed_10m,
-            雷:[95,96,99].includes(c.weather_code), code:c.weather_code};
+            雷:[95,96,99].includes(c.weather_code), code:c.weather_code,
+            これから3時間:ahead,
+            日の出:(j.daily?.sunrise?.[0] || "").slice(11),
+            日の入り:(j.daily?.sunset?.[0] || "").slice(11)};
   }catch{ return "取得できず"; }
 }
 
@@ -142,13 +241,25 @@ export default async (req) => {
       本人の最新の発言: latest ? latest.content : "なし",
       今日すでに実施した内容: done ? {内容:done.type, 距離:done.dist, 時間:done.time,
         ペース:done.pace, きつさ:done.hard, メモ:done.memo} : "まだ何もしていない",
-      積み上げ: {通算距離:Number(dist.toFixed(1)), 記録数:db.records.length},
+      曜日: "日月火水木金土"[new Date(today+"T12:00:00").getDay()] + "曜日",
+      週ごとの距離: weekly(db.records, today),
+      前回の外ランから何日空いたか: sinceLastRun(db.records, today),
+      最長距離: Math.max(0, ...db.records.map(r => r.dist || 0)),
+      積み上げ: {
+        連続日数: streakOf(db.records, today),
+        今月の距離: Number(db.records.filter(r => r.date.startsWith(today.slice(0,7)))
+                          .reduce((a,r)=>a+(r.dist||0), 0).toFixed(1)),
+        通算距離: Number(dist.toFixed(1)),
+        記録数: db.records.length
+      },
       目標体重: (db.settings && db.settings.goalW) || 60,
+      身長cm: (db.settings && db.settings.height) || "不明",
+      体組成の現状: trend(db.records),
       現在の天気: await weather(),
       直近の記録: db.records.slice(-21).map(r => ({
         いつ: labelOf(daysAgo(r.date, today)), 日付:r.date, 内容:r.type,
-        体重:r.w, 体脂肪率:r.fat, 距離:r.dist, 時間:r.time, ペース:r.pace,
-        高低差:r.elev, きつさ:r.hard, メモ:r.memo, 走った方角:r.dir
+        体重:r.w, 体脂肪率:r.fat, 距離:r.dist,
+        きつさ:r.hard, メモ:r.memo, 走った方角:r.dir
       }))
     };
 

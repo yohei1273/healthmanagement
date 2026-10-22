@@ -638,7 +638,8 @@ function renderDiet(){
      <div><div class="k">除脂肪量</div><div class="v">${cur.lean.toFixed(1)}</div>${arrow(dLean)}</div>`;
   $("#dietNote").textContent =
     `${goalW}kg に落ちたとき、この除脂肪量 ${cur.lean.toFixed(1)}kg を保てていれば体脂肪率は `
-    + `${((goalW-cur.lean)/goalW*100).toFixed(1)}% になります。減った分が脂肪か筋肉かは上の2つの矢印で見てください。`;
+    + `${((goalW-cur.lean)/goalW*100).toFixed(1)}% になります。`
+    + "　減った分が脂肪か筋肉かは上の2つの矢印で見てください。";
 }
 
 /* ---------------- 天気の判定に使う値だけ ---------------- */
@@ -969,8 +970,20 @@ const COACH_PROMPT = `あなたは名古屋市緑区に住む20代男性のラ�
 各記録には「いつ」が付いています。日付から自分で何日前かを計算せず、
 必ずその表記に従ってください。「今日」と書かれた記録は今日のことです。
 
+「積み上げ」と「体組成の現状」の数字は計算済みです。
+連続日数・距離・体脂肪量・除脂肪量とその増減は計算し直さず、そのまま使ってください。
+体重は水分で1〜2kg動くので、日々の増減では判断しないこと。
+見るべきは体脂肪量が減っているか、除脂肪量が保てているかの2点です。
+距離を伸ばす話は「週ごとの距離」で判断すること。
+週合計が前週の1.1倍を超える伸ばし方は故障が出やすい水準です。
+
 話し方の指針:
-- 一人のコーチとして、対等に、率直に話す。敬語は使いすぎない。
+- 敬語で話す。丁寧だが堅苦しくせず、言うべきことは率直に言う。タメ口は使わない。
+- 走る速さは彼の目的ではない。ペース・タイム・ピッチには触れない。
+  遅くなったことを指摘しない。本人が訊いたときだけ答える。
+- 減量の主因は食事。体重が落ちていないときに走る距離を増やす提案はしない。
+  7kmでも消費は450kcal程度で、脂肪1kgの7200kcalに対して小さい。
+  食事の内容・量・間食・飲み物・たんぱく質が足りているかを見る。
 - 褒めるときは必ず具体的な数字を根拠にする。「すごいですね」だけは言わない。
   「先週の5kmより22秒速い」のように、データのどこを見てそう言ったのかを示す。
 - 良くない兆候があれば率直に伝える。除脂肪量が落ちている、
@@ -1000,8 +1013,33 @@ function coachContext(){
     積み上げ: tallies(),
     目標体重: Number($("#goalW").value) || 60,
     今日すでに実施した内容: todayRecord() || "まだ何もしていない",
-    直近の記録: DB.records.slice(-14).map(r=>
-      Object.assign({いつ:labelOf(daysAgo(r.date))}, r))
+    体組成の現状: (()=>{
+      const w = DB.records.filter(r=>bodyComp(r));
+      if(!w.length) return "記録なし";
+      const now = bodyComp(w[w.length-1]);
+      const past = bodyComp(w.length>=7 ? w[w.length-7] : w[0]);
+      return {体脂肪量kg:Number(now.fat.toFixed(2)), 除脂肪量kg:Number(now.lean.toFixed(2)),
+              体脂肪量の増減:Number((now.fat-past.fat).toFixed(2)),
+              除脂肪量の増減:Number((now.lean-past.lean).toFixed(2))};
+    })(),
+    身長cm: (DB.settings && DB.settings.height) || "不明",
+    週ごとの距離: (()=>{
+      const end = new Date(iso(new Date())+"T12:00:00"), out = [];
+      for(let w=0; w<4; w++){
+        const hi = new Date(end); hi.setDate(hi.getDate()-w*7);
+        const lo = new Date(hi);  lo.setDate(lo.getDate()-6);
+        const km = DB.records.filter(r=>{
+          const d = new Date(r.date+"T12:00:00"); return d>=lo && d<=hi;
+        }).reduce((a,r)=>a+(r.dist||0),0);
+        out.push({[w===0?"直近7日":`${w*7+1}〜${w*7+7}日前`]: Number(km.toFixed(1))});
+      }
+      return out;
+    })(),
+    最長距離: Math.max(0, ...DB.records.map(r=>r.dist||0)),
+    直近の記録: DB.records.slice(-14).map(r=>({
+      いつ: labelOf(daysAgo(r.date)), 内容: r.type, 体重: r.w, 体脂肪率: r.fat,
+      距離: r.dist, きつさ: r.hard, メモ: r.memo
+    }))
   };
 }
 async function askCoach(text, opts){
@@ -1037,9 +1075,7 @@ function commentOnRecord(rec){
   if(rec.pace) bits.push(`ペース ${rec.pace}`);
   if(rec.hard) bits.push(`きつさ ${rec.hard}/5`);
   if(rec.memo) bits.push(`メモ: ${rec.memo}`);
-  const pb = rec.dist ? bestPace(rec.dist) : null;
-  if(pb) bits.push(`この距離帯のこれまでの最速は ${pb.r.date} の ${pb.r.pace}`);
-  bits.push("今日の走りを評価して、次につながる一言をください。");
+  bits.push("今日の内容について一言ください。速さには触れず、体組成の動きと食事を見てください。");
   askCoach(bits.join(" / "));
 }
 
